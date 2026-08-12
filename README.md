@@ -1,98 +1,70 @@
-# vinext-starter
+# 魚骨洞天
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+「魚骨洞天」是用於創意發想與問題分析的教學活動網站。學生從人、方法與環境等角度拆解問題，再整理可嘗試的創意方案。
 
-## Prerequisites
+## 兩種可用版本
 
-- Node.js `>=22.13.0`
+| 版本 | 位置 | 適合用途 |
+| --- | --- | --- |
+| GitHub Pages 範例 | [`docs/index.html`](docs/index.html) | 公開展示、快速教學活動、免伺服器。 |
+| 完整活動網站 | [`public/fishbone.html`](public/fishbone.html) 與 [`app/`](app) | 後續擴充互動、資料保存或教師功能。 |
 
-## Quick Start
+## 公開發布到 GitHub Pages
 
-```bash
+本 repository 已包含可以直接發布的靜態範例。請在 GitHub repository 進入 `Settings` → `Pages`，選擇以分支發布，並設定：
+
+- Branch：`main`
+- Folder：`/docs`
+
+發布完成後，網站網址為：
+
+`https://yiying010.github.io/fishbone/`
+
+GitHub Pages 版本不會把輸入內容傳到伺服器或保存；重新整理頁面後，輸入內容會消失。
+
+## 日後更新 GitHub Pages
+
+修改 [`docs/index.html`](docs/index.html) 後，在專案資料夾開啟 PowerShell 並輸入：
+
+```powershell
+git add .
+git commit -m "更新魚骨洞天網頁"
+git push
+```
+
+GitHub Pages 會自動重新發布；公開網址不會改變。
+
+## 本機開發完整版本
+
+環境需求：Node.js `>=22.13.0`。
+
+```powershell
 npm install
 npm run dev
+```
+
+驗證建置：
+
+```powershell
 npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+## 自架伺服器
 
-## Included Shape
+目前最推薦先以 GitHub Pages 或其他靜態主機發布。若要部署到校內／自有伺服器，或未來需要保存學生資料與教師後台，請先閱讀完整的 [自架伺服器部署分析](SELF_HOSTING_ANALYSIS.md)。
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+簡要結論：靜態範例可直接自架；完整 vinext 應用可以自架，但目前偏向 Cloudflare Workers 執行環境，需要另外建立並驗證 Node.js 部署版本。
 
-## Workspace Auth Headers
+## 專案結構
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```text
+app/                     完整應用的頁面與樣式
+public/fishbone.html     主要活動頁面
+docs/index.html          GitHub Pages 靜態範例
+worker/                  Cloudflare Worker 進入點
+SELF_HOSTING_ANALYSIS.md 自架伺服器部署分析
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+## 資料與隱私
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+請勿將 API 金鑰、密碼或學生個資提交到 GitHub。公開發布前，也請確認教材與圖片具有可公開使用的授權。

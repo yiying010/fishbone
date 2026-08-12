@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "魚骨洞天 GPT Site 原型",
-  description: "國中生問題解決與魚骨圖多模態互動原型。",
+  title: "魚骨洞天",
+  description: "魚骨洞天 GPT Site 學生端活動原型",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

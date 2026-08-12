@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>魚骨洞天｜創意發想</title>
+  <style>
+    :root{--ink:#17324d;--muted:#60758a;--paper:#fffaf0;--accent:#e9844a;--line:#d9c8ad}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;color:var(--ink);background:linear-gradient(135deg,#f4ead8,#dcefe9)}
+    main{width:min(960px,calc(100% - 32px));margin:auto;padding:56px 0 72px}.hero,.panel{background:rgba(255,250,240,.94);border:1px solid var(--line);border-radius:24px;box-shadow:0 16px 40px #17324d18}.hero{padding:40px;margin-bottom:20px}.eyebrow{color:var(--accent);font-weight:800;letter-spacing:.12em}h1{font-size:clamp(2.2rem,6vw,4.5rem);line-height:1;margin:12px 0 16px}h2{margin-top:0}p{line-height:1.8;color:var(--muted)}.panel{padding:28px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:22px 0}label{display:block;font-weight:800}textarea{width:100%;min-height:130px;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:12px;font:inherit;resize:vertical;background:#fffdf8}button{border:0;border-radius:999px;padding:12px 20px;background:var(--accent);color:white;font:inherit;font-weight:800;cursor:pointer}#result{display:none;margin-top:20px;padding:18px;border-radius:14px;background:#edf6ee;color:#245b3d;line-height:1.7}footer{text-align:center;margin-top:18px;color:var(--muted);font-size:.9rem}@media(max-width:700px){main{padding-top:24px}.hero{padding:28px}.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">FISHBONE DONGTIAN</div>
+      <h1>把問題攤開，<br>讓創意進來。</h1>
+      <p>這是一個可直接放在 GitHub Pages 的簡單示範版。請從三個面向找出可能原因。</p>
+    </section>
+    <section class="panel">
+      <h2>魚骨洞天｜三面向發想</h2>
+      <p>每個欄位至少寫下一個想法，完成後按下整理。</p>
+      <div class="grid">
+        <label>人／角色<textarea id="people" placeholder="誰受到影響？誰可以幫忙？"></textarea></label>
+        <label>方法／流程<textarea id="process" placeholder="目前怎麼做？哪一步可以改變？"></textarea></label>
+        <label>環境／資源<textarea id="context" placeholder="有哪些限制、工具或新情境？"></textarea></label>
+      </div>
+      <button id="summarize">整理我的想法</button>
+      <div id="result" role="status"></div>
+    </section>
+    <footer>GitHub Pages 靜態範例｜資料只保留在目前瀏覽器頁面中。</footer>
+  </main>
+  <script>
+    document.querySelector('#summarize').addEventListener('click', () => {
+      const ids = ['people', 'process', 'context'];
+      const count = ids.filter(id => document.querySelector('#' + id).value.trim()).length;
+      const result = document.querySelector('#result');
+      result.style.display = 'block';
+      result.textContent = count === 3
+        ? '太好了！三個面向都已經有想法，可以開始比較、組合，並挑選最值得嘗試的方案。'
+        : `目前完成 ${count}/3 個面向。再補充 ${3 - count} 個欄位，就能看見更完整的問題全貌。`;
+    });
+  </script>
+</body>
+</html>

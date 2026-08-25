@@ -16,7 +16,7 @@
 
 ```text
 public/fishbone.html     Activity document shell and UI markup
-public/fishbone.css      Presentation rules
+public/fishbone-*.css    Ordered presentation layers
 public/fishbone-*.js     State, sync, domain, workflow, UI, SVG, and bootstrap code
 server/src/              Fastify and PostgreSQL room server
 server/test/             Contract, unit, and integration tests

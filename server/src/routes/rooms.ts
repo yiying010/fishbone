@@ -2,7 +2,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppConfig } from "../config.ts";
 import { SnapshotError, assertSnapshot, withoutNul } from "../domain/snapshot.ts";
-import { RoomCodeFormatError, formatRoomCode, normalizeRoomCode } from "../rooms/codes.ts";
+import {
+  RoomCodeFormatError,
+  formatRoomCode,
+  normalizeAdminRoomCode,
+  normalizeRoomCode,
+} from "../rooms/codes.ts";
 import {
   RoomCodeError,
   RoomNotFoundError,
@@ -348,7 +353,7 @@ function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): voi
 
   app.get("/api/admin/rooms/:code/export", async (request, reply) => {
     if (!authorize(request, reply)) return reply;
-    const roomCode = normalizeRoomCode((request.params as { code?: string }).code);
+    const roomCode = normalizeAdminRoomCode((request.params as { code?: string }).code);
     const data = await store.exportRoom(roomCode);
     if (data === null) {
       reply.code(404);
@@ -360,7 +365,7 @@ function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): voi
 
   app.delete("/api/admin/rooms/:code", async (request, reply) => {
     if (!authorize(request, reply)) return reply;
-    const roomCode = normalizeRoomCode((request.params as { code?: string }).code);
+    const roomCode = normalizeAdminRoomCode((request.params as { code?: string }).code);
     const deleted = await store.deleteRoom(roomCode);
     reply.code(deleted ? 200 : 404);
     return { room: roomCode, deleted };

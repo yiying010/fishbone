@@ -75,6 +75,28 @@ export function normalizeRoomCode(input: unknown): string {
   return code;
 }
 
+/**
+ * Admin lookups take the code exactly as stored, including codes from before
+ * this scheme existed.
+ *
+ * Rooms coded by hand can no longer be joined, and normalizeRoomCode refuses
+ * them. Without this they could not be exported or deleted either: they would
+ * sit unreachable until the retention sweep removed them unseen. Being lenient
+ * here costs nothing, because the admin routes are behind ADMIN_TOKEN and so
+ * there is no oracle to protect.
+ */
+export function normalizeAdminRoomCode(input: unknown): string {
+  if (typeof input !== "string") throw new RoomCodeFormatError("room code must be a string");
+  const code = input.trim();
+  if (code === "" || code.length > 128) {
+    throw new RoomCodeFormatError("room code must be between 1 and 128 characters");
+  }
+  if (Array.from(code).some((ch) => (ch.codePointAt(0) ?? 0) < 0x20 || ch.codePointAt(0) === 0x7f)) {
+    throw new RoomCodeFormatError("room code must not contain control characters");
+  }
+  return code;
+}
+
 /** The form shown to a class, e.g. k7m2x-9qpwd. Only ever for display. */
 export function formatRoomCode(code: string): string {
   const groups: string[] = [];

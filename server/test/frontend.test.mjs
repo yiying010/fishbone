@@ -90,7 +90,7 @@ test("the student is only in the room once the server has accepted the code", ()
   assert.ok(join, "joinActivity not found");
   // An unknown code used to create a room silently. Now the join is awaited and
   // rolled back, so a wrong code leaves the student where they were.
-  assert.match(join[0], /await connectRoom\(true\)/);
+  assert.match(join[0], /await connectRoom\(true,/);
   assert.match(join[0], /S\.joined=wasJoined/);
   assert.match(join[0], /找不到這個房間碼/);
   // render() clears #gateMsg, so a message shown before it is never seen.
@@ -99,6 +99,59 @@ test("the student is only in the room once the server has accepted the code", ()
     failure.indexOf("render()") < failure.indexOf("showGate("),
     "the failure message must be written after the re-render, or the student sees nothing",
   );
+});
+
+test("a live session is never repointed at a different room", () => {
+  // S.roomCode is read when each request is built, so changing it while a
+  // session is running would send this room's snapshot into the other one.
+  // Both entry points must refuse rather than switch in place.
+  const join = html.match(/async function joinActivity\(\)\{[\s\S]*?\n {4}\}/)[0];
+  assert.match(join, /if\(S\.joined&&room!==S\.roomCode\)\{showGate\(/);
+
+  const create = html.match(/async function createRoom\(\)\{[\s\S]*?\n {4}\}/)[0];
+  assert.match(create, /if\(S\.joined\)\{showGate\(/);
+  // The refusal has to come before the request that would allocate a room.
+  assert.ok(
+    create.indexOf("if(S.joined)") < create.indexOf('fetch(SYNC.base+"api/rooms"'),
+    "createRoom must refuse before it allocates a room",
+  );
+});
+
+test("a failed re-join restores the sync it interrupted", () => {
+  const join = html.match(/async function joinActivity\(\)\{[\s\S]*?\n {4}\}/)[0];
+  const failure = join.slice(join.indexOf('outcome!=="ok"'));
+  // connectRoom bumps SYNC.session, which stops the poll loop that was running
+  // for the room this device was already in. Nothing else restarts it.
+  assert.match(failure, /SYNC\.session=0;SYNC\.token=""/);
+  assert.match(failure, /if\(wasJoined\)setTimeout\(\(\)=>\{if\(S\.joined&&!SYNC\.session\)connectRoom\(\)\}/);
+});
+
+test("the local cache is merged before the server snapshot, not after", () => {
+  // mergeRoom lets the incoming object win for the fields it does not version,
+  // so the other order lets a stale device overwrite what the group confirmed.
+  const join = html.match(/async function joinActivity\(\)\{[\s\S]*?\n {4}\}/)[0];
+  assert.match(join, /connectRoom\(true,\(\)=>\{\s*loadRoom\(room\);/);
+
+  const connect = html.match(/async function connectRoom\(initial,beforeApply\)\{[\s\S]*?\n {4}\}/)[0];
+  assert.ok(
+    connect.indexOf("beforeApply()") < connect.indexOf("applyRemote(data.snapshot)"),
+    "the callback must run before the server snapshot is applied",
+  );
+});
+
+test("a 429 is honoured rather than being overwritten by the generic backoff", () => {
+  const branches = html.match(/if\(res\.status===429\)\{[^}]*\}/g) ?? [];
+  // Four in all: the two retry loops, plus connectRoom and createRoom, which
+  // report to the student and stop rather than retrying.
+  assert.ok(branches.length >= 2, `expected several 429 branches, found ${branches.length}`);
+  const retrying = branches.filter((branch) => branch.includes("retryAfterMs(res)"));
+  assert.equal(retrying.length, 2, "the poll and the push must both honour Retry-After");
+  for (const branch of branches) {
+    // Throwing would land in the catch, whose own status message replaces this
+    // one before the browser paints, making the branch invisible.
+    assert.doesNotMatch(branch, /throw/);
+  }
+  assert.match(html, /function retryAfterMs\(res\)/);
 });
 
 test("the teacher creates the room; the code is never typed by a person", () => {

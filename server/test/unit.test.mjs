@@ -7,6 +7,7 @@ import {
   MIN_CODE_LENGTH,
   formatRoomCode,
   generateRoomCode,
+  normalizeAdminRoomCode,
   normalizeRoomCode,
 } from "../../build/rooms/codes.js";
 import { RateLimiter } from "../../build/rate-limit.js";
@@ -47,6 +48,17 @@ test("a code is accepted however a student types it", () => {
   assert.throws(() => normalizeRoomCode(`k7m2x${NUL}9qpwd`), /unusable character/);
   assert.throws(() => normalizeRoomCode("a/b/c/d/e/f"), /unusable character/);
   assert.throws(() => normalizeRoomCode(42), /must be a string/);
+});
+
+test("admin lookups still resolve codes that predate this scheme", () => {
+  // Those rooms cannot be joined any more; being able to export them before
+  // the retention sweep removes them is the point.
+  assert.equal(normalizeAdminRoomCode("FISH-042"), "FISH-042");
+  assert.equal(normalizeAdminRoomCode(" 六年三班 "), "六年三班");
+  assert.equal(normalizeAdminRoomCode("k7m2x9qpwd"), "k7m2x9qpwd");
+  assert.throws(() => normalizeAdminRoomCode(""), /between 1 and 128/);
+  assert.throws(() => normalizeAdminRoomCode(`a${NUL}b`), /control characters/);
+  assert.throws(() => normalizeAdminRoomCode(42), /must be a string/);
 });
 
 test("the rate limiter refills over time and keeps addresses apart", () => {

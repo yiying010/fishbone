@@ -34,7 +34,11 @@ export interface AppConfig {
   longPollMs: number;
   maxSnapshotBytes: number;
   bodyLimitBytes: number;
-  /** Length of newly generated codes. Existing shorter codes still resolve. */
+  /**
+   * Length of newly generated codes. Codes already issued at another length
+   * between 8 and 24 still resolve; hand-typed codes from before server-issued
+   * codes existed do not, and are reachable only through the admin routes.
+   */
   roomCodeLength: number;
   /** How long a member's session token stays valid, refreshed on every request. */
   sessionTtlHours: number;

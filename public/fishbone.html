@@ -181,6 +181,7 @@
        ignores order; what is actually sent keeps the local order untouched. */
     function canonJson(v){if(v===undefined)return "null";if(v===null||typeof v!=="object")return JSON.stringify(v);if(Array.isArray(v)){let parts=v.map(canonJson);if(v.every(x=>x&&typeof x==="object"&&!Array.isArray(x)&&typeof x.id==="string"))parts.sort();return "["+parts.join(",")+"]"}return "{"+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+":"+canonJson(v[k])).join(",")+"}"}
     function syncSleep(ms){return new Promise(r=>setTimeout(r,ms))}
+    function retryAfterMs(res){let header=Number(res.headers.get("retry-after"));return Math.min(60000,Math.max(1000,(Number.isFinite(header)&&header>0?header:5)*1000))}
     function syncOnlineText(){return "已連上小組伺服器，其他裝置的更新會自動出現。"}
     function setSyncStatus(connected,msg){SYNC.connected=connected;SYNC.status=msg;let el=$("syncStatus");if(el){el.textContent=msg;el.className=connected?"syncNote ok":"syncNote"}}
     function applyRemote(data){if(!data)return;syncMuted=true;try{mergeRoom(data);autoAdvanceFromShared();render()}finally{syncMuted=false}}
@@ -200,7 +201,7 @@
     /* Returns "ok", "not-found", "rate-limited" or "error". The caller decides
        what to tell the student, because a failure while joining and a failure
        while already in a room mean different things to them. */
-    async function connectRoom(initial){
+    async function connectRoom(initial,beforeApply){
       if(location.protocol==="file:"){SYNC.offline=true;SYNC.session=0;setSyncStatus(false,"目前以 file:// 開啟，只有這台裝置看得到內容。請改用伺服器網址進行小組活動。");render();return "error"}
       SYNC.offline=false;let session=++SYNC.session;SYNC.revision=0;SYNC.serverJson="";SYNC.token="";
       setSyncStatus(false,"正在連線到小組伺服器…");
@@ -214,7 +215,10 @@
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();
         if(SYNC.session!==session)return "error";
-        SYNC.token=data.token||"";SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});SYNC.failures=0;
+        SYNC.token=data.token||"";
+        // Anything the caller wants merged before the server's snapshot lands.
+        if(beforeApply)beforeApply();
+        SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});SYNC.failures=0;
         applyRemote(data.snapshot);
         setSyncStatus(true,syncOnlineText());
         pollLoop(session);schedulePush();
@@ -259,7 +263,10 @@
             if(SYNC.session!==session)return;
             throw new Error("HTTP 404");
           }
-          if(res.status===429)setSyncStatus(false,"伺服器暫時限制了請求，稍後會自動再試。");
+          /* Honour Retry-After rather than falling through to the generic
+             backoff, whose status message would overwrite this one before the
+             browser ever painted it. */
+          if(res.status===429){let wait=retryAfterMs(res);setSyncStatus(false,"伺服器暫時限制了請求，"+Math.round(wait/1000)+" 秒後自動再試。");await syncSleep(wait);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
           if(SYNC.session!==session)return;
@@ -303,7 +310,7 @@
             if(SYNC.session!==session)return;
             throw new Error("HTTP 404");
           }
-          if(res.status===429){setSyncStatus(false,"伺服器暫時限制了請求，稍後會自動再試。");throw new Error("HTTP 429")}
+          if(res.status===429){let wait=retryAfterMs(res);setSyncStatus(false,"伺服器暫時限制了請求，"+Math.round(wait/1000)+" 秒後自動再試。");setTimeout(schedulePush,wait);return}
           if(res.status===409){let other=await res.json();SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
@@ -592,18 +599,37 @@
       let name=$("joinName").value.trim(),typed=$("joinRoom").value.trim(),room=canonRoomCode(typed);
       if(!name||!typed){showGate("請先輸入姓名或暱稱與小組房間碼。");return}
       if(room.length<8){showGate("房間碼看起來不正確，請向老師再確認一次。");return}
+      /* Switching rooms in place would carry this room's cards into the next
+         one: S still holds them, and the first push after joining uploads the
+         lot. A reload is the only way that cannot leak one class's writing into
+         another class's room. */
+      if(S.joined&&room!==S.roomCode){showGate("你目前已經在另一個房間中。請先重新整理頁面再加入新房間，否則這個房間的內容會被帶過去。");return}
       let wasJoined=S.joined,wasRoom=S.roomCode;
       S.nameDraft=name;S.roomCode=room;S.joined=true;S.active=S.selfId;
-      let outcome=await connectRoom(true);
+      /* The local cache is merged before the server's snapshot, not after:
+         mergeRoom lets the incoming object win for the fields it does not
+         version, so the other order would let a stale device overwrite what the
+         group has since confirmed. */
+      let outcome=await connectRoom(true,()=>{
+        loadRoom(room);
+        ensureSource(S.selfId,name,colors[joinedMembers().length%colors.length]);
+        S.active=S.selfId;
+      });
       if(outcome!=="ok"){
         S.joined=wasJoined;S.roomCode=wasRoom;
+        // Leave no half-live session pointing at a room this device is not in.
+        SYNC.session=0;SYNC.token="";
         // render() clears the gate message, so it has to come first.
         render();
         showGate(outcome==="not-found"?"找不到這個房間碼，請再確認一次。房間碼由老師建立後提供。":outcome==="rate-limited"?"嘗試次數過多，請稍候一分鐘再試。":"目前連不上小組伺服器，請確認網路後再試一次。");
+        /* The attempt stopped the poll loop that was running for the room this
+           device was already in. Without this the student keeps working and
+           keeps seeing "connected", but never receives another teammate's
+           update for the rest of the lesson. */
+        if(wasJoined)setTimeout(()=>{if(S.joined&&!SYNC.session)connectRoom()},1200);
         return;
       }
-      loadRoom(room);ensureSource(S.selfId,name,colors[joinedMembers().length%colors.length]);
-      S.active=S.selfId;S.step=2;markInteraction();
+      S.step=2;markInteraction();
       if(roomChannel)roomChannel.postMessage({room:S.roomCode,from:S.selfId,kind:"sync-request"});
       render();schedulePush();
     }
@@ -612,6 +638,12 @@
     async function createRoom(){
       markInteraction();
       if(location.protocol==="file:"){showGate("目前以 file:// 開啟，無法建立房間。請改用伺服器網址。");return}
+      /* Same reason as joinActivity: S.roomCode is read at request time, so
+         pointing it at a new room while a session is live would send this
+         room's snapshot into the new one. */
+      if(S.joined){showGate("你目前已經在房間中。請先重新整理頁面再建立新房間，否則目前房間的內容會被帶進新房間。");return}
+      // render() rebuilds Step 1 from state, so keep whatever name was typed.
+      let typedName=(($("joinName")||{}).value||"").trim();if(typedName)S.nameDraft=typedName;
       let btn=$("createRoomBtn");if(btn)btn.disabled=true;
       try{
         let res=await fetch(SYNC.base+"api/rooms",{method:"POST",cache:"no-store",headers:{"content-type":"application/json"},body:"{}"});

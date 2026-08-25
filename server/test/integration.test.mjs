@@ -675,6 +675,26 @@ if (!databaseUrl) {
     );
   });
 
+  test("a room coded by hand before this scheme can still be exported and deleted", async () => {
+    // Rooms like this exist only from before server-issued codes. They cannot
+    // be joined any more, so without a lenient admin lookup they would be
+    // unreachable until the retention sweep removed them unseen.
+    await pool.query("insert into rooms (code) values ('FISH-042')");
+
+    const refused = await post("/api/rooms/FISH-042/join", { memberId: "u1", name: "小安", step: 2 });
+    assert.equal(refused.statusCode, 400);
+    assert.equal(json(refused).error, "bad_room_code");
+
+    const authorized = auth(process.env.ADMIN_TOKEN);
+    const exported = await get("/api/admin/rooms/FISH-042/export", authorized);
+    assert.equal(exported.statusCode, 200);
+    assert.equal(json(exported).room.code, "FISH-042");
+
+    const removed = await app.inject({ method: "DELETE", url: "/api/admin/rooms/FISH-042", headers: authorized });
+    assert.equal(removed.statusCode, 200);
+    assert.equal(json(removed).deleted, true);
+  });
+
   test("admin routes need the token", async () => {
     const code = await newRoom();
     const session = await joinRoom(code, "u1", "小安");

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import Fastify from "fastify";
 
 import { normalizeMemberId } from "../../build/rooms/store.js";
 import {
@@ -12,6 +13,14 @@ import {
 } from "../../build/rooms/codes.js";
 import { RateLimiter } from "../../build/rate-limit.js";
 import { assertSnapshot, clampRound, readItems, readSources, readVotes } from "../../build/domain/snapshot.js";
+import {
+  AiProviderError,
+  AiRequestError,
+  AiReviewService,
+  OpenAiReviewClient,
+  extractAiInput,
+} from "../../build/ai/review.js";
+import { registerRoomRoutes } from "../../build/routes/rooms.js";
 
 const NUL = String.fromCharCode(0);
 
@@ -132,6 +141,266 @@ test("card attribution prefers createdBy and keeps the rest as payload", () => {
   assert.equal(items[0].author, "u1");
   assert.equal(items[0].status, "待確認");
   assert.deepEqual(items[0].payload, { aiGuess: "原因" });
+});
+
+test("AI inputs are selected from authoritative state and omit identity fields", () => {
+  const snapshot = {
+    sources: [{ id: "u1", name: "學生真名", joined: true }],
+    selected: "小組作業常常無法準時完成",
+    problem: "小組作業常常無法準時完成。",
+    problemDetails: [{ id: "pd1", text: "同時有很多報告", createdBy: "u1" }],
+    causes: [
+      { id: "c1", text: "沒有先整理截止日期", createdBy: "u1", status: "已確認為原因", catId: "cat1" },
+      { id: "c2", text: "先列出所有期限", createdBy: "u2", status: "待確認" },
+    ],
+    cats: [{ id: "cat1", name: "期限整理" }],
+    goal: "建立清楚的作業安排，減少遲交。",
+    goalIdeas: [{ id: "g1", text: "希望先知道哪些作業快到期", createdBy: "u1", priority: ["c1"] }],
+    methods: [
+      { id: "m1", text: "每天放學後整理作業期限", createdBy: "u1", status: "正式方法", causes: ["c1"], effect: "讓小組提早知道到期順序", big: "期限管理" },
+    ],
+    feasible: "m1",
+    feasibleReason: "每天都能做到",
+    unique: "m1",
+    uniqueReason: "把期限集中整理",
+    reflections: [{ id: "r1", text: "魚骨圖讓我看見沒有整理期限是重要原因", createdBy: "u1" }],
+  };
+
+  const step5 = extractAiInput("step5_problem", undefined, snapshot, "u1", 12_000);
+  assert.deepEqual(step5.content, {
+    selected_problem: snapshot.selected,
+    clarifications: ["同時有很多報告"],
+  });
+
+  const step8 = extractAiInput("step8_cause", "c1", snapshot, "u1", 12_000);
+  assert.deepEqual(step8.content, {
+    confirmed_problem: snapshot.problem,
+    cause_card: "沒有先整理截止日期",
+  });
+  assert.throws(
+    () => extractAiInput("step8_cause", "c2", snapshot, "u1", 12_000),
+    (error) => error instanceof AiRequestError && error.code === "ai_item_forbidden",
+  );
+
+  const step11 = extractAiInput("step11_goal", undefined, snapshot, "u1", 12_000);
+  assert.deepEqual(step11.content.priority_causes, ["沒有先整理截止日期"]);
+
+  const step14 = extractAiInput("step14_method", "m1", snapshot, "u1", 12_000);
+  assert.deepEqual(step14.content.linked_causes, ["沒有先整理截止日期"]);
+  assert.equal(step14.content.confirmed_goal, snapshot.goal);
+
+  const step19 = extractAiInput("step19_reflection", undefined, snapshot, "u1", 12_000);
+  const serialized = JSON.stringify(step19);
+  assert.doesNotMatch(serialized, /學生真名|"u1"|"createdBy"|"sources"/);
+  assert.deepEqual(step19.content.reflections, [
+    { label: "Reflection 1", text: "魚骨圖讓我看見沒有整理期限是重要原因" },
+  ]);
+});
+
+test("OpenAI review uses strict structured output without storage or provider tools", async () => {
+  let sent;
+  const client = new OpenAiReviewClient({
+    apiKey: "test-key-never-logged",
+    model: "test-model",
+    timeoutMs: 5_000,
+    maxOutputTokens: 500,
+    fetchFn: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        id: "resp_test",
+        model: "test-model",
+        output: [{ content: [{ type: "output_text", text: JSON.stringify({
+          classification: "cause",
+          reason: "這段內容正在說明問題發生的原因。",
+          clarification_question: null,
+        }) }] }],
+        usage: { input_tokens: 20, output_tokens: 12 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const response = await client.generate({
+    task: "step8_cause",
+    content: { confirmed_problem: "作業遲交", cause_card: "忘記期限" },
+  });
+  assert.equal(response.value.classification, "cause");
+  assert.equal(sent.store, false);
+  assert.equal(sent.text.format.type, "json_schema");
+  assert.equal(sent.text.format.strict, true);
+  assert.equal(sent.tools, undefined);
+  assert.equal(sent.previous_response_id, undefined);
+});
+
+test("invalid provider output is rejected and duplicate AI inputs share one call", async () => {
+  const invalid = new OpenAiReviewClient({
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 5_000,
+    maxOutputTokens: 500,
+    fetchFn: async () => new Response(JSON.stringify({ output: [{ content: [{ type: "output_text", text: "{}" }] }] }), { status: 200 }),
+  });
+  await assert.rejects(
+    invalid.generate({ task: "step8_cause", content: { confirmed_problem: "問題", cause_card: "原因" } }),
+    (error) => error instanceof AiProviderError && error.kind === "invalid_output",
+  );
+
+  let calls = 0;
+  const fakeClient = {
+    async generate() {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return {
+        value: { classification: "cause", reason: "理由", clarification_question: null },
+        metadata: { providerRequestId: "resp", model: "test", latencyMs: 5, inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+  const service = new AiReviewService({ client: fakeClient, requestsPerMemberPerMinute: 1 });
+  const input = { task: "step8_cause", content: { confirmed_problem: "問題", cause_card: "原因" } };
+  const [first, second] = await Promise.all([
+    service.review(1, "u1", input),
+    service.review(1, "u1", input),
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(first.inputHash, second.inputHash);
+});
+
+async function aiRouteApp({ member = { memberId: "u1", roomId: 1 }, revision = 7, revisions = [revision], snapshot, review }) {
+  const app = Fastify({ logger: false });
+  let readCount = 0;
+  const store = {
+    async authenticate(_code, token) { return token === "valid-token" ? member : null; },
+    async read() {
+      const current = revisions[Math.min(readCount, revisions.length - 1)];
+      readCount += 1;
+      return { revision: current, currentStep: 14, snapshot };
+    },
+  };
+  const config = {
+    sessionTtlHours: 24,
+    aiMaxInputChars: 12_000,
+    maxArtifactBytes: 4_194_304,
+    bodyLimitBytes: 4_194_304,
+    longPollMs: 0,
+    adminToken: null,
+  };
+  registerRoomRoutes(app, {
+    config,
+    store,
+    notifier: { notify() {}, async wait() {} },
+    limiters: { requests: null, lookupFailures: null, roomCreates: null },
+    aiService: { review },
+  });
+  await app.ready();
+  return app;
+}
+
+test("AI HTTP route reuses room authentication and rejects stale revisions before a provider call", async () => {
+  let calls = 0;
+  const app = await aiRouteApp({
+    snapshot: { sources: [], problem: "作業遲交", causes: [{ id: "c1", text: "忘記期限", createdBy: "u1" }] },
+    review: async () => { calls += 1; throw new Error("should not be called"); },
+  });
+  try {
+    const missingSession = await app.inject({
+      method: "POST",
+      url: "/api/rooms/abcdefghjk/ai/review",
+      payload: { task: "step8_cause", itemId: "c1", baseRevision: 7 },
+    });
+    assert.equal(missingSession.statusCode, 404);
+
+    const stale = await app.inject({
+      method: "POST",
+      url: "/api/rooms/abcdefghjk/ai/review",
+      headers: { authorization: "Bearer valid-token" },
+      payload: { task: "step8_cause", itemId: "c1", baseRevision: 6 },
+    });
+    assert.equal(stale.statusCode, 409);
+    assert.equal(JSON.parse(stale.body).error, "stale_room_revision");
+    assert.equal(calls, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("AI HTTP route enforces card ownership and returns only the validated result envelope", async () => {
+  let calls = 0;
+  const baseSnapshot = {
+    sources: [],
+    problem: "作業遲交",
+    causes: [
+      { id: "mine", text: "忘記期限", createdBy: "u1" },
+      { id: "other", text: "沒有整理清單", createdBy: "u2" },
+    ],
+  };
+  const app = await aiRouteApp({
+    snapshot: baseSnapshot,
+    review: async () => {
+      calls += 1;
+      return {
+        inputHash: "a".repeat(64),
+        promptVersion: "step8-v1",
+        result: { classification: "cause", reason: "這是在說明原因。", clarification_question: null },
+        metadata: { providerRequestId: "resp", model: "test", latencyMs: 1, inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  });
+  try {
+    const forbidden = await app.inject({
+      method: "POST",
+      url: "/api/rooms/abcdefghjk/ai/review",
+      headers: { authorization: "Bearer valid-token" },
+      payload: { task: "step8_cause", itemId: "other", baseRevision: 7 },
+    });
+    assert.equal(forbidden.statusCode, 403);
+    assert.equal(calls, 0);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/rooms/abcdefghjk/ai/review",
+      headers: { authorization: "Bearer valid-token" },
+      payload: { task: "step8_cause", itemId: "mine", baseRevision: 7 },
+    });
+    assert.equal(accepted.statusCode, 200, accepted.body);
+    const body = JSON.parse(accepted.body);
+    assert.equal(body.task, "step8_cause");
+    assert.equal(body.result.classification, "cause");
+    assert.equal(body.providerRequestId, undefined);
+    assert.equal(accepted.headers["cache-control"], "no-store");
+    assert.equal(calls, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("an AI result is discarded when the room changes during the provider call", async () => {
+  let calls = 0;
+  const app = await aiRouteApp({
+    revisions: [7, 8],
+    snapshot: { sources: [], problem: "作業遲交", causes: [{ id: "c1", text: "忘記期限", createdBy: "u1" }] },
+    review: async () => {
+      calls += 1;
+      return {
+        inputHash: "b".repeat(64),
+        promptVersion: "step8-v1",
+        result: { classification: "cause", reason: "理由", clarification_question: null },
+        metadata: { providerRequestId: "resp", model: "test", latencyMs: 1, inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  });
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/rooms/abcdefghjk/ai/review",
+      headers: { authorization: "Bearer valid-token" },
+      payload: { task: "step8_cause", itemId: "c1", baseRevision: 7 },
+    });
+    assert.equal(response.statusCode, 409);
+    assert.equal(JSON.parse(response.body).revision, 8);
+    assert.equal(calls, 1);
+  } finally {
+    await app.close();
+  }
 });
 
 test("round numbers are clamped so one payload cannot abort every later write", () => {

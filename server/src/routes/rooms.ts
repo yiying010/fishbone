@@ -17,6 +17,14 @@ import {
 } from "../rooms/store.ts";
 import type { RoomNotifier } from "../rooms/notifier.ts";
 import type { RateLimiter } from "../rate-limit.ts";
+import {
+  AiProviderError,
+  AiRateLimitError,
+  AiRequestError,
+  extractAiInput,
+  parseAiTask,
+  type AiReviewService,
+} from "../ai/review.ts";
 
 export interface Limiters {
   /** Everything under /api, per client address. Generous; only bounds a single source. */
@@ -32,6 +40,7 @@ interface Deps {
   store: RoomStore;
   notifier: RoomNotifier;
   limiters: Limiters;
+  aiService: AiReviewService | null;
 }
 
 const MAX_DISPLAY_NAME = 64;
@@ -225,6 +234,98 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
 
     notifier.notify(roomCode, result.revision);
     return { room: roomCode, ...result };
+  });
+
+  app.post("/api/rooms/:code/ai/review", async (request, reply) => {
+    const limited = gate(request, reply);
+    if (limited) return limited;
+
+    const session = await authenticate(request);
+    if (session === null) return notFound(request, reply);
+    const { roomCode, member } = session;
+    reply.header("cache-control", "no-store");
+
+    if (deps.aiService === null) {
+      reply.code(503);
+      return { error: "ai_unavailable", message: "AI assistance is not enabled." };
+    }
+
+    const payload = body(request);
+    const baseRevision = Math.trunc(Number(payload["baseRevision"]));
+    if (!Number.isFinite(baseRevision) || baseRevision < 0) {
+      reply.code(400);
+      return { error: "invalid_base_revision", message: "baseRevision must be a non-negative integer" };
+    }
+
+    const room = await store.read(roomCode);
+    if (room === null) return notFound(request, reply);
+    if (room.revision !== baseRevision) {
+      reply.code(409);
+      return { error: "stale_room_revision", revision: room.revision };
+    }
+
+    try {
+      const task = parseAiTask(payload["task"]);
+      const input = extractAiInput(task, payload["itemId"], room.snapshot, member.memberId, config.aiMaxInputChars);
+      const reviewed = await deps.aiService.review(member.roomId, member.memberId, input);
+      // The provider call may finish after another member edits the room. Do
+      // not hand a now-stale result to the browser as if it still matched the
+      // authoritative snapshot; the caller can refresh and request it again.
+      const latest = await store.read(roomCode);
+      if (latest === null) return notFound(request, reply);
+      if (latest.revision !== baseRevision) {
+        request.log.info(
+          { task, correlationId: reviewed.inputHash.slice(0, 16), outcome: "stale_after_provider" },
+          "AI review discarded",
+        );
+        reply.code(409);
+        return { error: "stale_room_revision", revision: latest.revision };
+      }
+      request.log.info(
+        {
+          task,
+          correlationId: reviewed.inputHash.slice(0, 16),
+          providerRequestId: reviewed.metadata.providerRequestId,
+          promptVersion: reviewed.promptVersion,
+          model: reviewed.metadata.model,
+          latencyMs: reviewed.metadata.latencyMs,
+          inputTokens: reviewed.metadata.inputTokens,
+          outputTokens: reviewed.metadata.outputTokens,
+          outcome: "success",
+        },
+        "AI review completed",
+      );
+      return {
+        task,
+        baseRevision,
+        inputHash: reviewed.inputHash,
+        promptVersion: reviewed.promptVersion,
+        result: reviewed.result,
+      };
+    } catch (error) {
+      if (error instanceof AiRequestError) {
+        reply.code(error.code === "ai_item_forbidden" ? 403 : 400);
+        return { error: error.code, message: "The requested AI review cannot be performed." };
+      }
+      if (error instanceof AiRateLimitError) {
+        request.log.info({ outcome: "rate_limited" }, "AI review refused");
+        reply
+          .code(429)
+          .header("retry-after", String(error.retryAfterSeconds))
+          .header("cache-control", "no-store");
+        return { error: "ai_rate_limited", retryAfterSeconds: error.retryAfterSeconds };
+      }
+      if (error instanceof AiProviderError) {
+        const invalid = error.kind === "invalid_output";
+        request.log.warn({ outcome: error.kind }, "AI review failed");
+        reply.code(invalid ? 502 : 503);
+        return {
+          error: invalid ? "ai_invalid_output" : "ai_temporarily_unavailable",
+          message: "AI assistance is temporarily unavailable. Please try again or continue manually.",
+        };
+      }
+      throw error;
+    }
   });
 
   app.post("/api/rooms/:code/artifacts", async (request, reply) => {

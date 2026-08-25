@@ -130,6 +130,11 @@ TEST_DATABASE_URL=postgres://test:test@127.0.0.1:5433/fishbone_test npm test
 
 重點：應用在容器內服務於 `/`，不知道自己的公開路徑，前端所有 URL 皆為相對路徑並在執行時由瀏覽器網址推導。因此掛載到 `https://creativity.rcsl.online/fishbone` 或任何其他前綴，都不需要修改設定或重新建置。
 
+外部 AI 協助預設關閉。伺服器端 API、資料最小化、權限與環境變數要求見
+[AI-assisted step requirements](docs/ai-integration-requirements.md)；在研究／隱私審查與另外的部署核准完成前，請保持 `AI_ENABLED=false`。
+活動原有判斷規則與正式啟用前的代表性評估案例另見
+[AI evaluation rules](docs/ai-evaluation-rules.md)。
+
 ## 隱私
 
 請勿將 API 金鑰、密碼或學生個資提交到版本庫；`.env` 已被忽略，只有 `.env.example` 會進版控。公開的 `docs/index.html` 展示頁不保存任何內容，不適合放入名冊或可識別個人的作品。

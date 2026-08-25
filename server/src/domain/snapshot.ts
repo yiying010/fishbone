@@ -185,7 +185,7 @@ export const VOTE_KINDS: { kind: string; field: string; roundField: string | nul
  * re-voting and belongs to the map's current round.
  */
 export function readVotes(snapshot: Snapshot, field: string, roundField: string | null): SnapshotVote[] {
-  const currentRound = roundField === null ? 1 : Math.max(1, Math.trunc(Number(snapshot[roundField]) || 1));
+  const currentRound = readRound(snapshot, roundField);
   const votes = record(snapshot[field]);
   const out: SnapshotVote[] = [];
   for (const [memberId, ballot] of Object.entries(votes)) {
@@ -194,12 +194,30 @@ export function readVotes(snapshot: Snapshot, field: string, roundField: string 
       const cast = ballot as Record<string, unknown>;
       const value = str(cast["value"]);
       if (value === "") continue;
-      out.push({ memberId, value, round: Math.max(1, Math.trunc(Number(cast["round"]) || currentRound)) });
+      out.push({ memberId, value, round: clampRound(cast["round"], currentRound) });
     } else if (typeof ballot === "string" && ballot !== "") {
       out.push({ memberId, value: ballot, round: currentRound });
     }
   }
   return out;
+}
+
+/**
+ * Round counters end up in an `int` column. A snapshot claiming round 1e10
+ * would otherwise abort the whole write, and because the write and the
+ * projection share one transaction, the room would reject every later write
+ * too. Clamping keeps one malformed payload from bricking a room.
+ */
+const MAX_ROUND = 1_000_000;
+
+export function clampRound(value: unknown, fallback: number): number {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(MAX_ROUND, parsed);
+}
+
+export function readRound(snapshot: Snapshot, roundField: string | null): number {
+  return roundField === null ? 1 : clampRound(snapshot[roundField], 1);
 }
 
 export function readString(snapshot: Snapshot, field: string): string {

@@ -2,12 +2,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
-import type { AppConfig } from "./config.js";
-import type { Pool } from "./db/pool.js";
-import { RoomNotifier } from "./rooms/notifier.js";
-import { RoomStore } from "./rooms/store.js";
-import { registerHealthRoutes } from "./routes/health.js";
-import { registerRoomRoutes } from "./routes/rooms.js";
+import type { AppConfig } from "./config.ts";
+import type { Pool } from "./db/pool.ts";
+import { RoomNotifier } from "./rooms/notifier.ts";
+import { RoomStore } from "./rooms/store.ts";
+import { registerHealthRoutes } from "./routes/health.ts";
+import { registerRoomRoutes } from "./routes/rooms.ts";
 
 export function defaultPublicDir(): string {
   // build/app.js -> repo root -> public

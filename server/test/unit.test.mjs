@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { normalizeMemberId, normalizeRoomCode } from "../../build/rooms/store.js";
-import { assertSnapshot, readItems, readSources, readVotes } from "../../build/domain/snapshot.js";
+import { assertSnapshot, clampRound, readItems, readSources, readVotes } from "../../build/domain/snapshot.js";
 
 const NUL = String.fromCharCode(0);
 
@@ -64,6 +64,16 @@ test("card attribution prefers createdBy and keeps the rest as payload", () => {
   assert.equal(items[0].author, "u1");
   assert.equal(items[0].status, "待確認");
   assert.deepEqual(items[0].payload, { aiGuess: "原因" });
+});
+
+test("round numbers are clamped so one payload cannot abort every later write", () => {
+  assert.equal(clampRound(3, 1), 3);
+  assert.equal(clampRound(0, 7), 7);
+  assert.equal(clampRound(-5, 7), 7);
+  assert.equal(clampRound("nonsense", 7), 7);
+  // Beyond int range: would otherwise abort the votes insert, and with it the
+  // transaction that carries the room's revision bump.
+  assert.equal(clampRound(1e10, 1), 1_000_000);
 });
 
 test("both ballot shapes are read, and a stale round is kept as its own round", () => {

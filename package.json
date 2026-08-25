@@ -13,7 +13,7 @@
     "migrate": "node server/src/cli/migrate.ts",
     "migrate:built": "node build/cli/migrate.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --test-concurrency=1 server/test/*.test.mjs"
+    "test": "npm run build && node --test --test-concurrency=1 server/test/*.test.mjs"
   },
   "dependencies": {
     "@fastify/static": "8.2.0",

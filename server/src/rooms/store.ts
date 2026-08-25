@@ -1,6 +1,6 @@
-﻿import { projectSnapshot } from "../domain/projection.js";
-import type { Snapshot } from "../domain/snapshot.js";
-import { withTransaction, type Pool } from "../db/pool.js";
+import { projectSnapshot } from "../domain/projection.ts";
+import type { Snapshot } from "../domain/snapshot.ts";
+import { withTransaction, type Pool } from "../db/pool.ts";
 
 export interface RoomState {
   revision: number;
@@ -23,6 +23,14 @@ export interface WriteConflict {
 export type WriteResult = WriteAccepted | WriteConflict;
 
 export class RoomCodeError extends Error {}
+
+/**
+ * The room code is well formed but no such room exists. Distinct from
+ * RoomCodeError because the client has to react differently: a malformed code
+ * is worth reporting to the student, a missing room means the room was deleted
+ * or has passed its retention period and this client must stop syncing.
+ */
+export class RoomNotFoundError extends Error {}
 
 /**
  * Room codes are typed by students on a phone. Normalising whitespace and
@@ -63,7 +71,14 @@ interface RoomRow {
 }
 
 export class RoomStore {
-  constructor(private readonly pool: Pool) {}
+  // Written out rather than as a parameter property: Node's strip-only
+  // TypeScript support cannot erase those, and `npm run dev` / `npm run migrate`
+  // execute these sources directly.
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
 
   /**
    * Creates the room if the code has never been used, and makes sure the
@@ -144,8 +159,8 @@ export class RoomStore {
   /**
    * Compare-and-set on the room revision. The client merged `baseRevision`
    * before producing this snapshot, so a mismatch means it has not seen
-   * somebody else's work yet and must merge again ??hence the conflict result
-   * carries the current snapshot.
+   * somebody else's work yet and must merge again, which is why the conflict
+   * result carries the current snapshot.
    */
   async write(
     code: string,
@@ -164,7 +179,7 @@ export class RoomStore {
       );
       const room = rows[0];
       if (room === undefined) {
-        throw new RoomCodeError(`room ${code} does not exist; join it first`);
+        throw new RoomNotFoundError(`room ${code} does not exist; join it first`);
       }
 
       if (room.revision !== baseRevision) {
@@ -207,7 +222,7 @@ export class RoomStore {
         [code],
       );
       const room = rows[0];
-      if (room === undefined) throw new RoomCodeError(`room ${code} does not exist; join it first`);
+      if (room === undefined) throw new RoomNotFoundError(`room ${code} does not exist; join it first`);
 
       const { rows: inserted } = await client.query<{ id: number }>(
         `insert into artifacts (room_id, revision, format, filename, content, exported_by)

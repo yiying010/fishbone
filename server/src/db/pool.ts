@@ -1,5 +1,5 @@
 import pg from "pg";
-import type { AppConfig } from "../config.js";
+import type { AppConfig } from "../config.ts";
 
 // bigint (int8) arrives as a string by default because it can exceed
 // Number.MAX_SAFE_INTEGER. Room revisions never will, and the client compares

@@ -6,6 +6,12 @@
     "moduleResolution": "NodeNext",
     "rootDir": "server/src",
     "outDir": "build",
+    // Relative imports are written with a .ts extension so that Node can run
+    // the sources directly (its type stripping does not remap a .js specifier
+    // to a sibling .ts). tsc rewrites them to .js on emit, so the compiled
+    // output the container runs is unaffected.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false,

@@ -1,4 +1,4 @@
-import type { RoomStore } from "./rooms/store.js";
+import type { RoomStore } from "./rooms/store.ts";
 
 export interface RetentionLogger {
   info(payload: Record<string, unknown>, message: string): void;

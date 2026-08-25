@@ -1,8 +1,8 @@
 /** `npm run migrate` — apply pending migrations and exit. */
-import { defaultPublicDir } from "../app.js";
-import { loadConfig } from "../config.js";
-import { runMigrations } from "../db/migrate.js";
-import { createPool } from "../db/pool.js";
+import { defaultPublicDir } from "../app.ts";
+import { loadConfig } from "../config.ts";
+import { runMigrations } from "../db/migrate.ts";
+import { createPool } from "../db/pool.ts";
 
 const config = loadConfig(defaultPublicDir());
 const pool = createPool(config);

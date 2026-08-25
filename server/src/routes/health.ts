@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Pool } from "../db/pool.js";
+import type { Pool } from "../db/pool.ts";
 
 /**
  * A liveness probe that cannot fail proves nothing, so this one actually

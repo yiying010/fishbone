@@ -1,8 +1,15 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { AppConfig } from "../config.js";
-import { SnapshotError, assertSnapshot, withoutNul } from "../domain/snapshot.js";
-import { RoomCodeError, normalizeMemberId, normalizeRoomCode, type RoomStore } from "../rooms/store.js";
-import type { RoomNotifier } from "../rooms/notifier.js";
+import type { AppConfig } from "../config.ts";
+import { SnapshotError, assertSnapshot, withoutNul } from "../domain/snapshot.ts";
+import {
+  RoomCodeError,
+  RoomNotFoundError,
+  normalizeMemberId,
+  normalizeRoomCode,
+  type RoomStore,
+} from "../rooms/store.ts";
+import type { RoomNotifier } from "../rooms/notifier.ts";
 
 interface Deps {
   config: AppConfig;
@@ -137,6 +144,13 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
   registerAdminRoutes(app, deps);
 
   app.setErrorHandler((error, _request, reply) => {
+    // 404 rather than 400 so that a client writing to a room that was deleted
+    // or purged gets the same signal as one reading it, and can stop instead of
+    // retrying a request that can never succeed.
+    if (error instanceof RoomNotFoundError) {
+      reply.code(404);
+      return reply.send({ error: "room_not_found", message: error.message });
+    }
     if (error instanceof RoomCodeError || error instanceof SnapshotError) {
       reply.code(400);
       return reply.send({ error: "bad_request", message: error.message });
@@ -193,10 +207,15 @@ function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): voi
   const token = config.adminToken;
   if (token === null) return;
 
+  // Comparing fixed-length digests keeps the comparison constant time without
+  // also leaking the token's length through an early return.
+  const expected = createHash("sha256").update(token, "utf8").digest();
+
   const authorize = (request: FastifyRequest, reply: FastifyReply): boolean => {
     const header = request.headers["authorization"];
     const provided = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
-    if (provided.length !== token.length || !timingSafeEqual(provided, token)) {
+    const actual = createHash("sha256").update(provided, "utf8").digest();
+    if (!timingSafeEqual(actual, expected)) {
       reply.code(401).send({ error: "unauthorized" });
       return false;
     }
@@ -222,10 +241,4 @@ function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): voi
     reply.code(deleted ? 200 : 404);
     return { room: roomCode, deleted };
   });
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  let diff = a.length ^ b.length;
-  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i % Math.max(1, b.length));
-  return diff === 0;
 }

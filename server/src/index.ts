@@ -1,9 +1,9 @@
-import { buildApp, defaultPublicDir } from "./app.js";
-import { loadConfig } from "./config.js";
-import { runMigrations } from "./db/migrate.js";
-import { createPool } from "./db/pool.js";
-import { startRetentionSweeper } from "./retention.js";
-import { RoomStore } from "./rooms/store.js";
+import { buildApp, defaultPublicDir } from "./app.ts";
+import { loadConfig } from "./config.ts";
+import { runMigrations } from "./db/migrate.ts";
+import { createPool } from "./db/pool.ts";
+import { startRetentionSweeper } from "./retention.ts";
+import { RoomStore } from "./rooms/store.ts";
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env["PUBLIC_DIR"]?.trim() || defaultPublicDir());

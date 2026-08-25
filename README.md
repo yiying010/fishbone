@@ -106,7 +106,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 npm test
 ```
 
-不需要資料庫也能執行，此時整合測試會跳過並說明原因。要完整執行，請提供一個**可拋棄**的資料庫，測試會先刪除並重建其 `public` schema：
+會先執行 `npm run build`，因為測試是針對編譯後的輸出。不需要資料庫也能執行，此時整合測試會跳過並說明原因。要完整執行，請提供一個**可拋棄**的資料庫，測試會先刪除並重建其 `public` schema：
 
 ```bash
 docker run -d --name fishbone-test-db -p 127.0.0.1:5433:5432 \

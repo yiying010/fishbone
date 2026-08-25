@@ -272,16 +272,87 @@ if (!databaseUrl) {
     assert.match(rows.rows[0].content, /忘記作業期限/);
   });
 
-  test("writing to a room nobody joined is a client error, not a new room", async () => {
+  test("writing to a room nobody joined is 404, so the client stops instead of retrying", async () => {
     const response = await post("/api/rooms/FISH-GHOST/state", {
       memberId: "u1",
       step: 2,
       baseRevision: 0,
       snapshot: snapshot(),
     });
-    assert.equal(response.statusCode, 400);
-    assert.match(json(response).message, /does not exist/);
+    // 404 and not 400: the client treats a missing room as "stop syncing", and a
+    // 400 would send it into an endless backoff retry of a doomed request.
+    assert.equal(response.statusCode, 404);
+    assert.equal(json(response).error, "room_not_found");
     assert.equal((await get("/api/rooms/FISH-GHOST/state")).statusCode, 404);
+    assert.equal(
+      (await post("/api/rooms/FISH-GHOST/artifacts", { format: "text", content: "x" })).statusCode,
+      404,
+    );
+    // A malformed code is still a 400: that one is worth telling the student.
+    assert.equal((await get("/api/rooms/A%2FB/state")).statusCode, 400);
+  });
+
+  test("a snapshot with duplicate ids does not wedge the room", async () => {
+    const room = "/api/rooms/FISH-DUPE";
+    await post(`${room}/join`, { memberId: "u1", name: "小安", step: 2 });
+
+    // Postgres refuses an ON CONFLICT DO UPDATE that touches a row twice, and
+    // the projection shares a transaction with the revision bump, so without
+    // deduplication this write would fail and every later write with it.
+    const hostile = await post(`${room}/state`, {
+      memberId: "u1",
+      step: 2,
+      baseRevision: 0,
+      snapshot: {
+        sources: [
+          { id: "u1", name: "小安", joined: true },
+          { id: "u1", name: "小安", joined: true },
+        ],
+        distresses: [
+          { id: "d1", text: "第一次", createdBy: "u1" },
+          { id: "d1", text: "重複的 id", createdBy: "u1" },
+        ],
+        groupProposals: [
+          { id: "gp1", source: "u1", groups: [] },
+          { id: "gp1", source: "u1", groups: [] },
+        ],
+        // Out of int range: would abort the votes insert if not clamped.
+        groupingRound: 1e10,
+        groupingVotes: { u1: { value: "gp1", round: 1e10 } },
+      },
+    });
+    assert.equal(hostile.statusCode, 200);
+
+    // The room still accepts normal writes afterwards.
+    const after = await post(`${room}/state`, {
+      memberId: "u1",
+      step: 2,
+      baseRevision: json(hostile).revision,
+      snapshot: snapshot({ distresses: [{ id: "d2", text: "後續照常", createdBy: "u1" }] }),
+    });
+    assert.equal(after.statusCode, 200);
+
+    const roomId = (await pool.query("select id from rooms where lower(code) = 'fish-dupe'")).rows[0].id;
+    const rows = await pool.query("select item_id from submissions where room_id = $1", [roomId]);
+    assert.deepEqual(rows.rows.map((r) => r.item_id), ["d2"]);
+  });
+
+  test("the projection never blanks a display name it already has", async () => {
+    const room = "/api/rooms/FISH-NAME";
+    await post(`${room}/join`, { memberId: "u1", name: "小安", step: 2 });
+    await post(`${room}/state`, {
+      memberId: "u1",
+      step: 2,
+      baseRevision: 0,
+      // A client that merged a partial source record can post one with no name.
+      snapshot: { sources: [{ id: "u1", joined: true }], distresses: [] },
+    });
+
+    const roomId = (await pool.query("select id from rooms where lower(code) = 'fish-name'")).rows[0].id;
+    const rows = await pool.query("select display_name from members where room_id = $1 and member_id = 'u1'", [
+      roomId,
+    ]);
+    assert.equal(rows.rows[0].display_name, "小安");
   });
 
   test("a long poll is released as soon as another device writes", async () => {

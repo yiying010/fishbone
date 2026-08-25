@@ -49,6 +49,29 @@ test("the API base is derived from the address bar, at any mount point", () => {
   assert.equal(base("/tools/fishbone/"), "/tools/fishbone/");
   assert.equal(base("/tools/fishbone"), "/tools/fishbone/");
   assert.equal(base(""), "/");
+
+  // A prefix containing a dot is a mount point, not a filename.
+  assert.equal(base("/fishbone.v2"), "/fishbone.v2/");
+  assert.equal(base("/fishbone.v2/"), "/fishbone.v2/");
+  assert.equal(base("/fishbone.v2/fishbone.html"), "/fishbone.v2/");
+});
+
+test("a room that no longer exists stops the session instead of re-creating it", () => {
+  assert.match(html, /function roomGone\(/);
+  // Both the poll and the push must stop, not re-join: a re-join would insert
+  // the room again and the next push would restore a deleted room's contents.
+  const rejoinOn404 = html.match(/if\(res\.status===404\)\{[^}]*\}/g) ?? [];
+  assert.ok(rejoinOn404.length >= 2, "expected the poll and the push to both handle 404");
+  for (const branch of rejoinOn404) {
+    assert.match(branch, /roomGone\(\)/);
+    assert.doesNotMatch(branch, /connectRoom\(\)/);
+  }
+});
+
+test("an immediate poll response is paced, so SYNC_LONG_POLL_MS=0 cannot spin", () => {
+  // The server answers at once when holding is disabled; without a floor the
+  // client would issue back-to-back full snapshot reads.
+  assert.match(html, /if\(data\.unchanged\)\{[\s\S]{0,400}?syncSleep\(\d+\)/);
 });
 
 test("sync requests are built from that base and the room code is escaped", () => {

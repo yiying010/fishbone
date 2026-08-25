@@ -152,9 +152,13 @@
     const SYNC={base:"",offline:false,session:0,revision:0,serverJson:"",connected:false,status:"尚未加入小組。",pushTimer:null,pushing:false,pushAgain:false,failures:0};
     /* The app is mounted at an unknown public subpath and is never told what it
        is, so the API base is derived from the address bar: a trailing slash means
-       a directory, a dotted last segment means a file, anything else is the mount
-       point itself served without its trailing slash. */
-    SYNC.base=(function(){let p=location.pathname||"/";if(p.endsWith("/"))return p;let cut=p.lastIndexOf("/"),last=p.slice(cut+1);return last.includes(".")?p.slice(0,cut+1):p+"/"})();
+       a directory, a page filename means take its directory, anything else is the
+       mount point itself served without its trailing slash.
+
+       The filename test is a page extension rather than "contains a dot", so a
+       prefix such as /fishbone.v2 is still recognised as a mount point. The only
+       page this server hands out is fishbone.html. */
+    SYNC.base=(function(){let p=location.pathname||"/";if(p.endsWith("/"))return p;let cut=p.lastIndexOf("/"),last=p.slice(cut+1);return /\.x?html?$/i.test(last)?p.slice(0,cut+1):p+"/"})();
     function roomApi(suffix){return SYNC.base+"api/rooms/"+encodeURIComponent(String(S.roomCode||"").trim())+"/"+suffix}
     /* Postgres stores the snapshot as jsonb, which does not preserve key order, so
        "did anything actually change" has to be asked of a canonical form.
@@ -169,6 +173,18 @@
     function syncOnlineText(){return "已連上小組伺服器，其他裝置的更新會自動出現。"}
     function setSyncStatus(connected,msg){SYNC.connected=connected;SYNC.status=msg;let el=$("syncStatus");if(el){el.textContent=msg;el.className=connected?"syncNote ok":"syncNote"}}
     function applyRemote(data){if(!data)return;syncMuted=true;try{mergeRoom(data);autoAdvanceFromShared();render()}finally{syncMuted=false}}
+    /* The room is gone from the server: deleted by a teacher, or purged by the
+       retention sweep. Stop the session rather than re-joining, because a
+       re-join would recreate the room and the next push would upload the whole
+       snapshot again, quietly undoing a deletion that was meant to be final.
+       Rejoining from Step 1 stays available as a deliberate choice. */
+    function roomGone(){
+      SYNC.session=0;
+      if(SYNC.pushTimer){clearTimeout(SYNC.pushTimer);SYNC.pushTimer=null}
+      SYNC.pushAgain=false;
+      setSyncStatus(false,"這個房間在伺服器上已不存在，可能已被移除或超過保存期限。目前內容仍留在這台裝置，若要繼續請回到 Step 1 重新加入。");
+      render();
+    }
     function schedulePush(){if(!S.joined||SYNC.offline||!SYNC.session)return;if(SYNC.pushTimer)return;SYNC.pushTimer=setTimeout(()=>{SYNC.pushTimer=null;pushRoom()},250)}
     async function connectRoom(){
       if(location.protocol==="file:"){SYNC.offline=true;SYNC.session=0;setSyncStatus(false,"目前以 file:// 開啟，只有這台裝置看得到內容。請改用伺服器網址進行小組活動。");render();return}
@@ -198,16 +214,27 @@
     async function pollLoop(session){
       while(SYNC.session===session&&S.joined&&!SYNC.offline){
         try{
+          let began=Date.now();
           let res=await fetch(roomApi("state")+"?since="+SYNC.revision+"&wait=1&member="+encodeURIComponent(S.selfId)+"&step="+S.step,{cache:"no-store",headers:{accept:"application/json"}});
           if(SYNC.session!==session)return;
-          if(res.status===404){connectRoom();return}
+          if(res.status===404){roomGone();return}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
           if(SYNC.session!==session)return;
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
+          if(data.unchanged){
+            /* The server may be configured not to hold the request at all
+               (SYNC_LONG_POLL_MS=0), in which case this answers immediately and
+               an unpaced loop would hammer a full snapshot read per iteration. */
+            if(Date.now()-began<1000)await syncSleep(2000);
+            continue;
+          }
+          /* A push accepted while this request was held can already have moved
+             the revision past what this response carries. Applying the older
+             snapshot would only cause a needless conflict on the next push. */
+          if((data.revision||0)<SYNC.revision)continue;
           SYNC.revision=data.revision||0;
-          if(data.unchanged)continue;
           SYNC.serverJson=canonJson(data.snapshot||{});
           applyRemote(data.snapshot);
           schedulePush();
@@ -229,11 +256,15 @@
           if(json===SYNC.serverJson)return;
           let res=await fetch(roomApi("state"),{method:"POST",cache:"no-store",headers:{"content-type":"application/json"},body:JSON.stringify({memberId:S.selfId,step:S.step,baseRevision:SYNC.revision,snapshot:snap})});
           if(SYNC.session!==session)return;
-          if(res.status===404){connectRoom();return}
+          if(res.status===404){roomGone();return}
           if(res.status===409){let other=await res.json();SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
-          SYNC.revision=data.revision||0;SYNC.serverJson=json;SYNC.failures=0;
+          /* Only move forward: a poll running in parallel may already have seen
+             a later revision, and rewinding would strand serverJson on an older
+             snapshot. */
+          if((data.revision||0)>SYNC.revision){SYNC.revision=data.revision||0;SYNC.serverJson=json}
+          SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           return;
         }

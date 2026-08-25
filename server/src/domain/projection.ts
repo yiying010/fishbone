@@ -10,7 +10,7 @@
  * Runs inside the caller's transaction.
  */
 
-import type { PoolClient } from "../db/pool.js";
+import type { PoolClient } from "../db/pool.ts";
 import {
   ITEM_KINDS,
   PROPOSAL_KINDS,
@@ -18,11 +18,28 @@ import {
   readBoolean,
   readItems,
   readProposals,
+  readRound,
   readSources,
   readString,
   readVotes,
   type Snapshot,
-} from "./snapshot.js";
+} from "./snapshot.ts";
+
+/**
+ * Postgres refuses an `on conflict do update` that would touch the same row
+ * twice. The projection shares a transaction with the revision bump, so a
+ * snapshot carrying one duplicated id would roll the write back, and the client
+ * would retry the same payload forever: a permanent, per-room denial of
+ * service, reachable by anyone who knows the room code. Collapsing duplicates
+ * here, last occurrence winning, removes the whole class.
+ */
+function dedupe<T>(rows: T[], key: (row: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  for (const row of rows) byKey.set(key(row), row);
+  return [...byKey.values()];
+}
+
+const KEY_SEPARATOR = String.fromCharCode(31);
 
 export interface ProjectionContext {
   roomId: number;
@@ -53,7 +70,7 @@ export async function projectSnapshot(
 }
 
 async function projectMembers(client: PoolClient, snapshot: Snapshot, context: ProjectionContext): Promise<void> {
-  const sources = readSources(snapshot);
+  const sources = dedupe(readSources(snapshot), (source) => source.id);
 
   await client.query(
     `insert into members (room_id, member_id, display_name, color, is_system, has_joined)
@@ -61,7 +78,11 @@ async function projectMembers(client: PoolClient, snapshot: Snapshot, context: P
        from unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[])
          as t(member_id, display_name, color, is_system, has_joined)
      on conflict (room_id, member_id) do update
-       set display_name = excluded.display_name,
+       -- Never blank a stored name: a client that merged a partial source
+       -- record can post an entry with no name, and that name is also what
+       -- groupings.title is built from.
+       set display_name = case when excluded.display_name = '' then members.display_name
+                               else excluded.display_name end,
            color        = excluded.color,
            is_system    = excluded.is_system,
            -- a member who has joined never un-joins within a room
@@ -92,25 +113,18 @@ async function projectMembers(client: PoolClient, snapshot: Snapshot, context: P
 }
 
 async function projectSubmissions(client: PoolClient, snapshot: Snapshot, roomId: number): Promise<void> {
-  const kinds: string[] = [];
-  const ids: string[] = [];
-  const steps: number[] = [];
-  const authors: (string | null)[] = [];
-  const bodies: string[] = [];
-  const statuses: string[] = [];
-  const payloads: string[] = [];
+  const collected = ITEM_KINDS.flatMap(({ kind, field, step }) =>
+    readItems(snapshot, field).map((item) => ({ kind, step, item })),
+  );
+  const rows = dedupe(collected, (row) => row.kind + KEY_SEPARATOR + row.item.id);
 
-  for (const { kind, field, step } of ITEM_KINDS) {
-    for (const item of readItems(snapshot, field)) {
-      kinds.push(kind);
-      ids.push(item.id);
-      steps.push(step);
-      authors.push(item.author);
-      bodies.push(item.text);
-      statuses.push(item.status);
-      payloads.push(JSON.stringify(item.payload));
-    }
-  }
+  const kinds = rows.map((row) => row.kind);
+  const ids = rows.map((row) => row.item.id);
+  const steps = rows.map((row) => row.step);
+  const authors = rows.map((row) => row.item.author);
+  const bodies = rows.map((row) => row.item.text);
+  const statuses = rows.map((row) => row.item.status);
+  const payloads = rows.map((row) => JSON.stringify(row.item.payload));
 
   await client.query(
     `insert into submissions (room_id, kind, item_id, step, author_member_id, body, status, payload)
@@ -141,24 +155,22 @@ async function projectSubmissions(client: PoolClient, snapshot: Snapshot, roomId
 }
 
 async function projectGroupings(client: PoolClient, snapshot: Snapshot, roomId: number): Promise<void> {
-  const kinds: string[] = [];
-  const ids: string[] = [];
-  const authors: (string | null)[] = [];
-  const officials: boolean[] = [];
-  const groups: string[] = [];
-  const payloads: string[] = [];
-
-  for (const { kind, field, confirmedField } of PROPOSAL_KINDS) {
+  const collected = PROPOSAL_KINDS.flatMap(({ kind, field, confirmedField }) => {
     const confirmed = readString(snapshot, confirmedField);
-    for (const proposal of readProposals(snapshot, field)) {
-      kinds.push(kind);
-      ids.push(proposal.id);
-      authors.push(proposal.author);
-      officials.push(confirmed !== "" && confirmed === proposal.id);
-      groups.push(JSON.stringify(proposal.groups));
-      payloads.push(JSON.stringify(proposal.payload));
-    }
-  }
+    return readProposals(snapshot, field).map((proposal) => ({
+      kind,
+      proposal,
+      official: confirmed !== "" && confirmed === proposal.id,
+    }));
+  });
+  const rows = dedupe(collected, (row) => row.kind + KEY_SEPARATOR + row.proposal.id);
+
+  const kinds = rows.map((row) => row.kind);
+  const ids = rows.map((row) => row.proposal.id);
+  const authors = rows.map((row) => row.proposal.author);
+  const officials = rows.map((row) => row.official);
+  const groups = rows.map((row) => JSON.stringify(row.proposal.groups));
+  const payloads = rows.map((row) => JSON.stringify(row.proposal.payload));
 
   // The proposal's title is rendered client-side from the author's display
   // name; store the same thing so exports do not need the client.
@@ -191,38 +203,42 @@ async function projectGroupings(client: PoolClient, snapshot: Snapshot, roomId: 
 }
 
 async function projectVotes(client: PoolClient, snapshot: Snapshot, roomId: number): Promise<void> {
-  const roundKinds: string[] = [];
-  const roundNumbers: number[] = [];
-  const roundTies: boolean[] = [];
-  const roundResolved: string[] = [];
-
-  const voteKinds: string[] = [];
-  const voteRounds: number[] = [];
-  const voteMembers: string[] = [];
-  const voteValues: string[] = [];
+  const roundRows: { kind: string; round: number; tie: boolean; resolved: string }[] = [];
+  const voteRows: { kind: string; round: number; memberId: string; value: string }[] = [];
 
   for (const { kind, field, roundField, resolvedField } of VOTE_KINDS) {
     const votes = readVotes(snapshot, field, roundField);
-    const currentRound = roundField === null ? 1 : Math.max(1, Math.trunc(Number(snapshot[roundField]) || 1));
+    const currentRound = readRound(snapshot, roundField);
     // `solutionTie` is the only tie flag the snapshot carries; every other
     // tie is derived in the UI from the counts, which are reproducible here.
     const tie = kind === "solution" ? readBoolean(snapshot, "solutionTie") : false;
     const resolved = resolvedField === null ? "" : readString(snapshot, resolvedField);
 
-    const rounds = new Set<number>([currentRound, ...votes.map((vote) => vote.round)]);
-    for (const round of rounds) {
-      roundKinds.push(kind);
-      roundNumbers.push(round);
-      roundTies.push(round === currentRound && tie);
-      roundResolved.push(round === currentRound ? resolved : "");
+    for (const round of new Set<number>([currentRound, ...votes.map((vote) => vote.round)])) {
+      roundRows.push({
+        kind,
+        round,
+        tie: round === currentRound && tie,
+        resolved: round === currentRound ? resolved : "",
+      });
     }
     for (const vote of votes) {
-      voteKinds.push(kind);
-      voteRounds.push(vote.round);
-      voteMembers.push(vote.memberId);
-      voteValues.push(vote.value);
+      voteRows.push({ kind, round: vote.round, memberId: vote.memberId, value: vote.value });
     }
   }
+
+  const rounds = dedupe(roundRows, (row) => row.kind + KEY_SEPARATOR + row.round);
+  const cast = dedupe(voteRows, (row) => row.kind + KEY_SEPARATOR + row.round + KEY_SEPARATOR + row.memberId);
+
+  const roundKinds = rounds.map((row) => row.kind);
+  const roundNumbers = rounds.map((row) => row.round);
+  const roundTies = rounds.map((row) => row.tie);
+  const roundResolved = rounds.map((row) => row.resolved);
+
+  const voteKinds = cast.map((row) => row.kind);
+  const voteRounds = cast.map((row) => row.round);
+  const voteMembers = cast.map((row) => row.memberId);
+  const voteValues = cast.map((row) => row.value);
 
   await client.query(
     `insert into vote_rounds (room_id, kind, round, is_tie, resolved_value)

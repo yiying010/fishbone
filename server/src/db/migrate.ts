@@ -1,5 +1,5 @@
-import { migrations } from "./migrations.js";
-import type { Pool } from "./pool.js";
+import { migrations } from "./migrations.ts";
+import type { Pool } from "./pool.ts";
 
 export interface MigrationLogger {
   info(message: string): void;

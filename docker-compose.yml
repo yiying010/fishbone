@@ -1,0 +1,48 @@
+name: fishbone
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # Deterministic collation so ordering does not depend on the host locale.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Not published by default: only the app needs it. Uncomment to inspect the
+    # database from the host during development.
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:?set DATA_RETENTION_DAYS in .env}
+      RETENTION_SWEEP_INTERVAL_MINUTES: ${RETENTION_SWEEP_INTERVAL_MINUTES:-60}
+      SYNC_LONG_POLL_MS: ${SYNC_LONG_POLL_MS:-20000}
+      MIGRATE_ON_START: ${MIGRATE_ON_START:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+    ports:
+      # Bound to loopback: the public entry point is nginx on the host, which
+      # terminates TLS and strips the /fishbone prefix before proxying here.
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+
+volumes:
+  db-data:

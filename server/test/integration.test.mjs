@@ -23,6 +23,7 @@ if (!databaseUrl) {
   const { createPool } = await import("../../build/db/pool.js");
   const { runMigrations } = await import("../../build/db/migrate.js");
   const { RoomStore } = await import("../../build/rooms/store.js");
+  const { startRetentionSweeper } = await import("../../build/retention.js");
 
   const config = loadConfig(defaultPublicDir());
   const pool = createPool(config);
@@ -402,15 +403,64 @@ if (!databaseUrl) {
     await pool.query("update rooms set last_activity_at = now() - interval '40 days' where id = $1", [roomId]);
 
     const store = new RoomStore(pool);
-    assert.deepEqual(await store.purgeExpired(3650), { deletedRooms: 0 }, "the configured period must be respected");
+    assert.deepEqual(
+      await store.purgeExpired(3650),
+      { deletedRooms: 0, codes: [] },
+      "the configured period must be respected",
+    );
 
-    const { deletedRooms } = await store.purgeExpired(30);
+    const { deletedRooms, codes } = await store.purgeExpired(30);
     assert.ok(deletedRooms >= 1);
+    // The sweep has to say what it removed. There is no undo and no off-host
+    // backup, so a count alone leaves no way to answer "what did we lose?".
+    assert.ok(codes.includes("FISH-OLD"), "purge must return the codes it deleted");
 
     // Hard delete: the room and everything hanging off it are gone, not flagged.
     assert.equal((await pool.query("select 1 from rooms where id = $1", [roomId])).rowCount, 0);
     assert.equal((await pool.query("select 1 from submissions where room_id = $1", [roomId])).rowCount, 0);
     assert.equal((await pool.query("select 1 from members where room_id = $1", [roomId])).rowCount, 0);
+    // votes hangs off rooms through vote_rounds, so it exercises a two-level
+    // cascade that the rows above do not.
+    assert.equal((await pool.query("select 1 from vote_rounds where room_id = $1", [roomId])).rowCount, 0);
+  });
+
+  test("a sweep that would delete an unusual share of rooms stops itself", async () => {
+    for (const code of ["BULK-A", "BULK-B", "BULK-C"]) {
+      await post(`/api/rooms/${code}/join`, { memberId: "u1", name: "小安", step: 1 });
+    }
+    await pool.query("update rooms set last_activity_at = now() - interval '400 days'");
+
+    const store = new RoomStore(pool);
+    const warnings = [];
+    const logger = {
+      info: () => {},
+      warn: (payload, message) => warnings.push({ payload, message }),
+      error: () => {},
+    };
+
+    // The typo case: a period short enough to expire everything.
+    const guarded = startRetentionSweeper(store, logger, {
+      retentionDays: 30,
+      intervalMinutes: 60,
+      bulkDeleteFraction: 0.25,
+      bulkDeleteMinimum: 2,
+      confirmBulkDelete: false,
+    });
+    guarded.stop();
+    assert.equal(await guarded.runOnce(), 0, "the guard must refuse the sweep");
+    assert.equal(warnings.length >= 1, true, "and must say why");
+    assert.ok((await pool.query("select 1 from rooms")).rowCount >= 3, "nothing may be deleted");
+
+    // The same sweep, explicitly confirmed, must go through.
+    const confirmed = startRetentionSweeper(store, logger, {
+      retentionDays: 30,
+      intervalMinutes: 60,
+      bulkDeleteFraction: 0.25,
+      bulkDeleteMinimum: 2,
+      confirmBulkDelete: true,
+    });
+    confirmed.stop();
+    assert.ok((await confirmed.runOnce()) >= 3, "confirmation must lift the guard");
   });
 
   test("admin routes need the token", async () => {

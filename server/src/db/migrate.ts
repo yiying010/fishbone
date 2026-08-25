@@ -13,16 +13,20 @@ export async function runMigrations(pool: Pool, logger: MigrationLogger): Promis
   const client = await pool.connect();
   const applied: string[] = [];
   try {
-    await client.query(`
-      create table if not exists schema_migrations (
-        id          text        primary key,
-        applied_at  timestamptz not null default now()
-      )
-    `);
-
     // Arbitrary but fixed key, namespaced to this application.
     await client.query("select pg_advisory_lock($1)", [7_351_209_884_113_001]);
     try {
+      // Inside the lock: `create table if not exists` is not atomic against a
+      // concurrent create, and two replicas racing here would leave one with
+      // "duplicate key value violates unique constraint pg_type_typname_nsp_index"
+      // rather than the safe start-together behaviour this function promises.
+      await client.query(`
+        create table if not exists schema_migrations (
+          id          text        primary key,
+          applied_at  timestamptz not null default now()
+        )
+      `);
+
       const { rows } = await client.query<{ id: string }>("select id from schema_migrations");
       const done = new Set(rows.map((row) => row.id));
 

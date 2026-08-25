@@ -86,6 +86,27 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * Ceiling for any value that ends up in a btree primary key, and for the
+ * display name that is copied into `groupings.title`.
+ *
+ * A btree index row cannot exceed roughly 2704 bytes, and a 3 KB id fits
+ * comfortably inside the 1 MB snapshot budget. Without this, one such id makes
+ * the projection insert fail, which rolls back the whole write transaction, so
+ * the revision never advances and the device retries the same payload forever.
+ * The dedupe and round-clamping guards elsewhere in this module exist for the
+ * same class of problem; length was the case they missed.
+ *
+ * Truncating rather than rejecting is deliberate: a malformed payload must not
+ * be able to lock a student out of syncing their work.
+ */
+const MAX_KEY_LENGTH = 200;
+const MAX_NAME_LENGTH = 200;
+
+function key(value: unknown): string {
+  return str(value).slice(0, MAX_KEY_LENGTH);
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -101,8 +122,11 @@ export function readSources(snapshot: Snapshot): SnapshotSource[] {
     .map(record)
     .filter((source) => str(source["id"]) !== "")
     .map((source) => ({
-      id: str(source["id"]),
-      name: str(source["name"]),
+      id: key(source["id"]),
+      // Capped for the same reason MAX_DISPLAY_NAME caps the join path: without
+      // it a name arriving this way could be a megabyte long, and it is copied
+      // verbatim into groupings.title.
+      name: str(source["name"]).slice(0, MAX_NAME_LENGTH),
       color: str(source["color"]),
       system: source["system"] === true,
       joined: source["joined"] === true,
@@ -125,9 +149,9 @@ export function readItems(snapshot: Snapshot, field: string): SnapshotItem[] {
     .filter((item) => str(item["id"]) !== "")
     .map((item) => {
       const { id, text, source, createdBy, status, ...rest } = item;
-      const author = str(createdBy) || str(source);
+      const author = key(createdBy) || key(source);
       return {
-        id: str(id),
+        id: key(id),
         text: str(text),
         author: author === "" ? null : author,
         status: str(status),
@@ -149,9 +173,9 @@ export function readProposals(snapshot: Snapshot, field: string): SnapshotPropos
     .filter((proposal) => str(proposal["id"]) !== "")
     .map((proposal) => {
       const { id, source, groups, ...rest } = proposal;
-      const author = str(source);
+      const author = key(source);
       return {
-        id: str(id),
+        id: key(id),
         author: author === "" ? null : author,
         groups: groups ?? [],
         payload: rest,
@@ -188,15 +212,17 @@ export function readVotes(snapshot: Snapshot, field: string, roundField: string 
   const currentRound = readRound(snapshot, roundField);
   const votes = record(snapshot[field]);
   const out: SnapshotVote[] = [];
-  for (const [memberId, ballot] of Object.entries(votes)) {
-    if (memberId === "") continue;
+  for (const [rawMemberId, ballot] of Object.entries(votes)) {
+    if (rawMemberId === "") continue;
+    // Both sides of a vote land in the primary key of `votes`.
+    const memberId = key(rawMemberId);
     if (ballot !== null && typeof ballot === "object" && !Array.isArray(ballot)) {
       const cast = ballot as Record<string, unknown>;
-      const value = str(cast["value"]);
+      const value = key(cast["value"]);
       if (value === "") continue;
       out.push({ memberId, value, round: clampRound(cast["round"], currentRound) });
     } else if (typeof ballot === "string" && ballot !== "") {
-      out.push({ memberId, value: ballot, round: currentRound });
+      out.push({ memberId, value: key(ballot), round: currentRound });
     }
   }
   return out;

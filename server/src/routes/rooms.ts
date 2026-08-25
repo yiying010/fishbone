@@ -58,7 +58,11 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
     const wantsHold = query.wait === "1" && config.longPollMs > 0;
 
     if (typeof query.member === "string" && query.member.trim() !== "") {
-      await store.touchMember(roomCode, normalizeMemberId(query.member), step(query.step));
+      // Recording presence is secondary to showing the room. If it fails, the
+      // student should still see their group's work rather than a 500.
+      await store
+        .touchMember(roomCode, normalizeMemberId(query.member), step(query.step))
+        .catch((error: unknown) => request.log.warn({ err: error }, "touchMember failed; serving state anyway"));
     }
 
     reply.header("cache-control", "no-store");

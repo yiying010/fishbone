@@ -236,16 +236,34 @@ export class RoomStore {
     });
   }
 
+  /** How many rooms a sweep would delete, without deleting anything. */
+  async countExpired(retentionDays: number): Promise<{ expiredRooms: number; totalRooms: number }> {
+    const { rows } = await this.pool.query<{ expired: string; total: string }>(
+      `select count(*) filter (where last_activity_at < now() - make_interval(days => $1::int)) as expired,
+              count(*) as total
+       from rooms`,
+      [retentionDays],
+    );
+    const row = rows[0];
+    return { expiredRooms: Number(row?.expired ?? 0), totalRooms: Number(row?.total ?? 0) };
+  }
+
   /**
    * Hard delete. Rows go, cascades take the rest; nothing is tombstoned, so a
    * purged room is genuinely gone from the live database.
+   *
+   * Returns the codes it removed. A room code is not student content, and
+   * without it a sweep leaves no way to answer "what did we just delete?" —
+   * which matters because there is no undo.
    */
-  async purgeExpired(retentionDays: number): Promise<{ deletedRooms: number }> {
-    const { rowCount } = await this.pool.query(
-      `delete from rooms where last_activity_at < now() - ($1 || ' days')::interval`,
-      [String(retentionDays)],
+  async purgeExpired(retentionDays: number): Promise<{ deletedRooms: number; codes: string[] }> {
+    const { rows } = await this.pool.query<{ code: string }>(
+      `delete from rooms
+       where last_activity_at < now() - make_interval(days => $1::int)
+       returning code`,
+      [retentionDays],
     );
-    return { deletedRooms: rowCount ?? 0 };
+    return { deletedRooms: rows.length, codes: rows.map((row) => row.code) };
   }
 
   /**

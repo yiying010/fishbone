@@ -18,6 +18,9 @@ async function main(): Promise<void> {
   const sweeper = startRetentionSweeper(new RoomStore(pool), app.log, {
     retentionDays: config.dataRetentionDays,
     intervalMinutes: config.retentionSweepIntervalMinutes,
+    bulkDeleteFraction: config.retentionBulkDeleteFraction,
+    bulkDeleteMinimum: config.retentionBulkDeleteMinimum,
+    confirmBulkDelete: config.retentionConfirmBulkDelete,
   });
 
   const shutdown = async (signal: string): Promise<void> => {

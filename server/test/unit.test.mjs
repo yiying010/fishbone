@@ -100,3 +100,27 @@ test("both ballot shapes are read, and a stale round is kept as its own round", 
     ],
   );
 });
+
+test("ids that reach a primary key are capped, and a long one does not wedge the room", () => {
+  // A btree index row tops out near 2704 bytes, but a 3 KB id fits easily
+  // inside the 1 MB snapshot budget. Uncapped, the projection insert fails,
+  // the whole write transaction rolls back, the revision never advances, and
+  // the device retries the same payload forever. Truncating keeps one
+  // malformed payload from locking a student out of syncing their work.
+  const huge = "x".repeat(3000);
+
+  const [source] = readSources({ sources: [{ id: huge, name: huge }] });
+  assert.equal(source.id.length, 200);
+  assert.equal(source.name.length, 200);
+
+  const [item] = readItems({ distresses: [{ id: huge, text: "keep the text", createdBy: huge }] }, "distresses");
+  assert.equal(item.id.length, 200);
+  assert.equal(item.author.length, 200);
+  // Only key columns are capped: card text is an unindexed column and the
+  // student's actual writing must survive intact.
+  assert.equal(item.text, "keep the text");
+
+  const [vote] = readVotes({ problemVotes: { [huge]: huge } }, "problemVotes", null);
+  assert.equal(vote.memberId.length, 200);
+  assert.equal(vote.value.length, 200);
+});

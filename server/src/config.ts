@@ -21,6 +21,14 @@ export interface AppConfig {
    */
   dataRetentionDays: number;
   retentionSweepIntervalMinutes: number;
+  /**
+   * A sweep deleting more than this share of all rooms, and at least
+   * `retentionBulkDeleteMinimum` of them, refuses to run. Guards against a
+   * mistyped retention period wiping years of rooms seconds after a restart.
+   */
+  retentionBulkDeleteFraction: number;
+  retentionBulkDeleteMinimum: number;
+  retentionConfirmBulkDelete: boolean;
   longPollMs: number;
   maxSnapshotBytes: number;
   bodyLimitBytes: number;
@@ -98,6 +106,13 @@ export function loadConfig(publicDir: string): AppConfig {
       () => optionalInteger("RETENTION_SWEEP_INTERVAL_MINUTES", 60, 1, 10_080),
       60,
     ),
+    // Expressed in percent so the variable takes an integer like every other one.
+    retentionBulkDeleteFraction: collect(
+      () => optionalInteger("RETENTION_BULK_DELETE_PERCENT", 25, 1, 100) / 100,
+      0.25,
+    ),
+    retentionBulkDeleteMinimum: collect(() => optionalInteger("RETENTION_BULK_DELETE_MINIMUM", 10, 1, 100_000), 10),
+    retentionConfirmBulkDelete: collect(() => optionalBoolean("RETENTION_CONFIRM_BULK_DELETE", false), false),
     longPollMs: collect(() => optionalInteger("SYNC_LONG_POLL_MS", 20_000, 0, 120_000), 20_000),
     maxSnapshotBytes: collect(() => optionalInteger("MAX_SNAPSHOT_BYTES", 1_048_576, 1024, 33_554_432), 1_048_576),
     bodyLimitBytes: collect(() => optionalInteger("BODY_LIMIT_BYTES", 4_194_304, 4096, 67_108_864), 4_194_304),

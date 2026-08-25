@@ -4,9 +4,27 @@
 
 ## 服務組成
 
-服務只有一個容器，內含 Node 22 執行的 Fastify 伺服器。它同時負責兩件事：提供活動頁 `public/fishbone.html`，以及提供房間同步 API。資料存放於 PostgreSQL 17。
+Compose 定義三個服務：`db`（PostgreSQL 17）、`migrate`（一次性，套用資料庫遷移後結束）、`app`（Node 22 執行的 Fastify 伺服器）。
 
-活動頁本身是單一 HTML 檔，所有 CSS 與 JavaScript 內嵌，不載入任何外部資源。伺服器不做任何伺服器端渲染。
+`app` 同時負責兩件事：提供活動頁 `public/fishbone.html`，以及提供房間同步 API。活動頁本身是單一 HTML 檔，所有 CSS 與 JavaScript 內嵌，不載入任何外部資源。伺服器不做任何伺服器端渲染。
+
+## 資料庫遷移
+
+遷移由專屬的 `migrate` 服務執行，`app` 透過 `service_completed_successfully` 等待它成功後才啟動。
+
+這樣做是為了讓失敗看得見。若遷移寫錯，停下來的會是一個狀態明確為 `Exited(1)` 的容器，訊息就在 `docker compose logs migrate`；相對地，若讓應用在啟動時自行遷移，同樣的錯誤會表現為應用不斷重啟，真正的原因埋在反覆滾動的日誌裡。
+
+`migrate` 服務執行結束後會停在 `Exited(0)`，這是正常狀態，不是故障。
+
+遷移可重複執行，也可並行執行：`runMigrations` 會取得 PostgreSQL advisory lock，並跳過 `schema_migrations` 中已記錄的項目。每一個遷移各自包在交易中，失敗即回滾。
+
+`migrate` 服務需要 `DATA_RETENTION_DAYS`，雖然它完全用不到這個值。原因是設定載入是一次性驗證整份環境變數的，缺少必填項會直接失敗；若不提供，遷移會以一則關於保存期限的錯誤訊息中止，與遷移本身無關。
+
+手動執行（例如在不啟動應用的情況下先套用遷移）：
+
+```bash
+docker compose run --rm migrate
+```
 
 ## 掛載路徑：唯一需要特別注意的約定
 
@@ -44,7 +62,7 @@
 | `HOST` | `0.0.0.0` | 監聽位址。 |
 | `PORT` | `3000` | 監聽埠。 |
 | `LOG_LEVEL` | `info` | `fatal`、`error`、`warn`、`info`、`debug`、`trace`。 |
-| `MIGRATE_ON_START` | `true` | 啟動時自動套用未執行的資料庫遷移。 |
+| `MIGRATE_ON_START` | `true` | 應用程序啟動時自動套用未執行的資料庫遷移。Compose 會覆寫成 `false`，因為遷移已由專屬的 `migrate` 服務完成，見下方「資料庫遷移」。 |
 | `RETENTION_SWEEP_INTERVAL_MINUTES` | `60` | 清除逾期房間的排程間隔。啟動時會先執行一次。 |
 | `SYNC_LONG_POLL_MS` | `20000` | 同步請求最長掛住的時間。設為 `0` 表示不掛住，客戶端改為單純重複輪詢。 |
 | `ADMIN_TOKEN` | 無 | 設定後才會註冊匯出與刪除房間的管理端點，最少 24 個字元。未設定時這些路由完全不存在。 |

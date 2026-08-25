@@ -81,7 +81,7 @@ docker compose run --rm migrate
 | `PUBLIC_DIR` | 映像檔內的 `public/` | 靜態檔案目錄。 |
 | `AI_ENABLED` | `false` | 是否註冊可用的外部 AI 協助。保持 `false` 時不會送出任何學生文字。設為 `true` 前須另行核准部署與研究／隱私流程。 |
 | `OPENAI_API_KEY` | 無 | `AI_ENABLED=true` 時必填。只傳入 app 容器，不得提交到 Git、映像檔或前端。 |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | 伺服器控制的模型名稱；瀏覽器不能指定。正式研究前應以代表性案例評估並固定版本。 |
+| `OPENAI_MODEL` | `gpt-4.1` | 伺服器控制的模型名稱；瀏覽器不能指定。正式研究前應以代表性案例評估並固定版本。 |
 | `AI_TIMEOUT_MS` | `30000` | 單次供應商請求逾時，最大 55 秒，須低於外層 proxy timeout。 |
 | `AI_MAX_INPUT_CHARS` | `12000` | 送往 AI 的最小化內容字元上限；超過時拒絕，不會傳完整快照。 |
 | `AI_MAX_OUTPUT_TOKENS` | `500` | 單次 AI 結果的輸出 token 上限。 |

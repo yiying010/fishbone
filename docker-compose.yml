@@ -95,7 +95,7 @@ services:
       # database and one-shot migration container never receive it.
       AI_ENABLED: ${AI_ENABLED:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1}
       AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
       AI_MAX_INPUT_CHARS: ${AI_MAX_INPUT_CHARS:-12000}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-500}

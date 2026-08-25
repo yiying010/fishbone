@@ -170,7 +170,7 @@ export function loadConfig(publicDir: string): AppConfig {
     publicDir,
     aiEnabled: collect(() => optionalBoolean("AI_ENABLED", false), false),
     openAiApiKey: raw("OPENAI_API_KEY") ?? null,
-    openAiModel: raw("OPENAI_MODEL") ?? "gpt-5.4-mini",
+    openAiModel: raw("OPENAI_MODEL") ?? "gpt-4.1",
     aiTimeoutMs: collect(() => optionalInteger("AI_TIMEOUT_MS", 30_000, 1_000, 55_000), 30_000),
     aiMaxInputChars: collect(() => optionalInteger("AI_MAX_INPUT_CHARS", 12_000, 500, 100_000), 12_000),
     aiMaxOutputTokens: collect(() => optionalInteger("AI_MAX_OUTPUT_TOKENS", 500, 100, 4_000), 500),

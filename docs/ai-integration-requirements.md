@@ -7,14 +7,14 @@ requirements for adding real AI assistance to Fishbone Cave. It is a
 requirements document only. It does not authorize deployment, select a model,
 or replace the existing human confirmation and voting flows.
 
-The first implementation must limit AI assistance to Steps 5, 11, 14, and 19.
-No other activity step may call an external AI service without a separate
+The first implementation must limit AI assistance to Steps 5, 8, 11, 14, and
+19. No other activity step may call an external AI service without a separate
 requirements review.
 
 ## Goals
 
-- Replace the current browser-side heuristic simulations in Steps 5, 11, 14,
-  and 19 with server-mediated AI assistance.
+- Replace the current browser-side heuristic simulations in Steps 5, 8, 11,
+  14, and 19 with server-mediated AI assistance.
 - Preserve the meaning of student contributions instead of inventing content.
 - Keep students and groups responsible for accepting, revising, or rejecting
   every AI-generated draft or judgment.
@@ -37,6 +37,8 @@ requirements review.
   students, or evaluate an individual student's ability or personality.
 - The first implementation must not use web search, file search, code
   execution, third-party tools, or persistent AI conversations.
+- Steps 2 and 17 must retain their existing deterministic validation and must
+  not call an external AI service in the first implementation.
 - This work must not require a routing change in the `rcsl-creativity`
   repository unless an implementation test demonstrates a concrete routing
   problem.
@@ -47,6 +49,7 @@ The current frontend labels several deterministic browser functions as AI
 assistance:
 
 - Step 5 creates a problem draft with `makeProblemDraft()`.
+- Step 8 classifies cause cards with `classifyCause()`.
 - Step 11 creates a decision-goal draft with `makeGoalDraft()`.
 - Step 14 calls `reviewMethodAlignment()` through `runMethodAiCheck()` after a
   short timer.
@@ -172,6 +175,63 @@ When `status` is `ready`, `draft` must be non-empty and
   becomes the official main problem.
 - A new or edited clarification invalidates the previous AI result and any
   related draft vote, using the existing invalidation behavior.
+
+### Step 8: Review cause-card content
+
+#### Purpose
+
+Give the author of each cause card a preliminary classification of whether the
+card is more like a cause, a method, a result, or content that needs
+clarification before the right-side fishbone is organized.
+
+#### Allowed input
+
+- The confirmed main problem.
+- The selected cause-card text.
+
+The server must select both fields from the latest authoritative room snapshot
+using a validated cause-card ID. Student names, room codes, member IDs, other
+cause cards, votes, and unrelated room content must not be sent.
+
+#### Required AI behavior
+
+- Evaluate the card in relation to the confirmed main problem.
+- Return exactly one preliminary classification:
+  - `cause`: the card describes why the main problem happens;
+  - `method`: the card describes an action that could address the problem;
+  - `result`: the card describes an outcome or consequence of the problem;
+  - `needs_clarification`: the relationship is ambiguous or too vague.
+- Give one concise reason written for a student.
+- When clarification is needed, ask exactly one focused question.
+- Do not rewrite the card automatically.
+- Do not infer facts that the student did not provide.
+- Do not confirm, delete, move, hide, or mark the card unused.
+
+#### Required structured result
+
+```json
+{
+  "classification": "cause | method | result | needs_clarification",
+  "reason": "string",
+  "clarification_question": "string or null"
+}
+```
+
+`clarification_question` must be non-empty only when `classification` is
+`needs_clarification`; otherwise it must be `null`.
+
+#### Application behavior
+
+- The result must be labeled as an AI preliminary judgment.
+- Only the card's original author may request a review or act on its result.
+- The author may accept a `cause` judgment, edit and resubmit the card, move a
+  `method` judgment to the existing method holding area, or leave the card
+  unused.
+- No AI result may perform one of those actions automatically.
+- Other group members may see the result but must not be allowed to process the
+  card on behalf of its author.
+- Editing the cause-card text or changing the confirmed main problem must
+  invalidate the previous Step 8 AI result.
 
 ### Step 11: Create the decision goal
 
@@ -336,8 +396,8 @@ Suggested request body:
 
 ```json
 {
-  "task": "step5_problem | step11_goal | step14_method | step19_reflection",
-  "itemId": "required only for step14_method",
+  "task": "step5_problem | step8_cause | step11_goal | step14_method | step19_reflection",
+  "itemId": "required for step8_cause and step14_method",
   "baseRevision": 123
 }
 ```
@@ -406,6 +466,8 @@ Relevant official documentation:
 - Do not add an unauthenticated general-purpose AI completion endpoint.
 - Preserve the current behavior that makes missing rooms, wrong room codes,
   wrong tokens, and expired tokens indistinguishable.
+- For Step 8, verify on the server that the authenticated member owns the
+  selected cause card.
 - For Step 14, verify on the server that the authenticated member owns the
   selected method.
 - Group-level Step 5, Step 11, and Step 19 requests must use the latest shared
@@ -471,6 +533,7 @@ AI_MAX_OUTPUT_TOKENS=500
 - Add an AI-specific limiter in addition to the existing overall API limiter.
 - Limit by authenticated member and room, not only by IP, because an entire
   class may share one school NAT address.
+- Step 8 limits should account for one review per cause-card revision.
 - Step 14 limits should account for one review per method revision.
 - Step 5, Step 11, and Step 19 should suppress duplicate requests for the same
   room revision and task.
@@ -498,7 +561,7 @@ AI_MAX_OUTPUT_TOKENS=500
 - Do not use AI output as a safety, mental-health, disciplinary, grading, or
   eligibility decision.
 - Potentially urgent or sensitive student disclosures require a separately
-  reviewed teacher-support and safeguarding process; the four tasks in this
+  reviewed teacher-support and safeguarding process; the five tasks in this
   document must not attempt diagnosis or crisis triage.
 
 ## Failure and offline behavior
@@ -515,8 +578,8 @@ AI_MAX_OUTPUT_TOKENS=500
 
 ## State and synchronization requirements
 
-- Store accepted AI-derived drafts in the existing Step 5, Step 11, Step 14,
-  and Step 19 state fields where practical.
+- Store accepted AI-derived drafts or preliminary judgments in the existing
+  Step 5, Step 8, Step 11, Step 14, and Step 19 state fields where practical.
 - Keep provider-specific response objects, raw prompts, and hidden model output
   out of the shared room snapshot.
 - A result must carry or be associated with its task, prompt version, input
@@ -560,7 +623,8 @@ Required server tests:
 - Missing, invalid, and expired sessions preserve existing indistinguishable
   failure behavior.
 - Unsupported tasks and arbitrary prompts are rejected.
-- Step 14 ownership is enforced.
+- Step 8 cause-card ownership is enforced.
+- Step 14 method ownership is enforced.
 - The server reads current snapshot content instead of trusting replacement
   text from the client.
 - Names, room codes, member IDs, and unrelated fields are absent from provider
@@ -575,7 +639,7 @@ Required server tests:
 
 Required frontend tests:
 
-- Only Steps 5, 11, 14, and 19 expose AI actions.
+- Only Steps 5, 8, 11, 14, and 19 expose AI actions.
 - Loading, success, retry, stale-result, and unavailable states render
   correctly.
 - Buttons cannot create unbounded duplicate requests.
@@ -589,6 +653,7 @@ Required manual acceptance checks:
 - Two browsers in one room receive the same accepted draft through the existing
   synchronization path.
 - A late AI response does not overwrite a newer edit.
+- A Step 8 result cannot be requested for another member's cause card.
 - A Step 14 result cannot be requested for another member's method.
 - The activity remains usable when the provider is disabled or unreachable.
 - No API credential is visible in page source, browser developer tools, Git
@@ -616,7 +681,7 @@ Required manual acceptance checks:
 The AI integration is ready for production review only when all of the
 following are true:
 
-- AI calls exist only in Steps 5, 11, 14, and 19.
+- AI calls exist only in Steps 5, 8, 11, 14, and 19.
 - Every call is server-side and requires a valid server-issued session.
 - Every task uses a fixed prompt and validated strict structured output.
 - No API key or direct identifier reaches the browser or Git repository.

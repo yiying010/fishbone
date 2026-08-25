@@ -12,20 +12,23 @@
 
 加入房間後會取得一組 session 權杖，讀寫房間都需要它。沒有權杖的請求，對存在與不存在的房間會得到完全相同的回應，因此無法藉由掃描代碼找出哪些房間是活的。詳見 [docs/deployment.md](docs/deployment.md)。
 
-## 專案結構
+## Project structure
 
 ```text
-public/fishbone.html     活動本體，單一 HTML 檔，唯一的前端來源
-server/src/              房間伺服器（Fastify + PostgreSQL）
-server/test/             測試
-docs/deployment.md       部署、環境變數、維運與資料保存
-docs/nginx/fishbone.conf 前端 nginx 設定範例
-docs/index.html          舊的 GitHub Pages 單機展示頁，與本服務無關
-Dockerfile               多階段建置，最終映像檔以非 root 執行
-docker-compose.yml       本機開發與單機部署
+public/fishbone.html     Activity document shell and UI markup
+public/fishbone.css      Presentation rules
+public/fishbone-*.js     State, sync, domain, workflow, UI, SVG, and bootstrap code
+server/src/              Fastify and PostgreSQL room server
+server/test/             Contract, unit, and integration tests
+docs/architecture.md     Responsibility boundaries and dependency flow
+docs/deployment.md       Deployment, operations, and data retention
+docs/nginx/fishbone.conf Example nginx configuration
+docs/index.html          Legacy standalone GitHub Pages demonstration
+Dockerfile               Multi-stage, non-root production image
+docker-compose.yml       Local development and single-host deployment
 ```
 
-`public/fishbone.html` 是唯一一份活動頁。伺服器會同時以 `/` 與 `/fishbone.html` 提供它。
+`public/fishbone.html` remains the only activity document. The server exposes it at both `/` and `/fishbone.html`; its relative asset references work under either path or a reverse-proxy mount prefix. See [docs/architecture.md](docs/architecture.md) for the module boundaries.
 
 ## 快速開始
 

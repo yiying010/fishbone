@@ -2,9 +2,35 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const html = await readFile(new URL("../../public/fishbone.html", import.meta.url), "utf8");
+const documentHtml = await readFile(new URL("../../public/fishbone.html", import.meta.url), "utf8");
+const scriptFiles = [
+  "fishbone-state.js",
+  "fishbone-sync.js",
+  "fishbone-domain.js",
+  "fishbone-workflow.js",
+  "fishbone-ui.js",
+  "fishbone-svg.js",
+  "fishbone-bootstrap.js",
+];
+const scripts = await Promise.all(
+  scriptFiles.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")),
+);
+// Contract assertions inspect the same source the browser receives after the
+// external classic scripts execute in document order.
+const html = [documentHtml, ...scripts].join("\n");
 
-test("public/fishbone.html is still the 19-step activity", () => {
+test("presentation and behavior are separated into ordered frontend assets", () => {
+  assert.match(documentHtml, /<link rel="stylesheet" href="fishbone\.css" \/>/);
+  assert.doesNotMatch(documentHtml, /<style(?:\s|>)/);
+  assert.doesNotMatch(documentHtml, /<script>(?:.|\s)*<\/script>/);
+
+  const referencedScripts = [...documentHtml.matchAll(/<script src="([^"]+)"><\/script>/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(referencedScripts, scriptFiles);
+});
+
+test("the frontend assets still implement the 19-step activity", () => {
   assert.match(html, /S\.step\s*\+\s*["']\/19["']/);
   assert.match(html, /最終成果呈現與匯出/);
   assert.match(html, /fishbone-room-v2/);

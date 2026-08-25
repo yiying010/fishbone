@@ -4,17 +4,19 @@ The project keeps the browser activity and room server in one deployment while s
 
 ## Frontend
 
-`public/fishbone.html` owns only the document structure and visible static markup. It loads the following relative assets in order:
+`public/fishbone.html` owns only the document structure and visible static markup. Its relative stylesheets preserve the original cascade in four layers: base controls, activity layout, fishbone diagrams, and later activity-specific overrides.
 
-1. `fishbone-state.js` owns initial state, local persistence, and same-browser collaboration.
-2. `fishbone-sync.js` owns room API synchronization and retry behavior.
-3. `fishbone-domain.js` owns validation, voting, and activity rules.
-4. `fishbone-workflow.js` owns activity mutations and workflow transitions.
-5. `fishbone-ui.js` owns rendering, step screens, and UI event handlers.
+The ordered scripts form these responsibility groups:
+
+1. Foundation and room-state assets own initial state, validation, local persistence, and same-browser collaboration.
+2. Sync-client and sync-loop assets own sessions, room API synchronization, retries, polling, pushes, and artifact persistence.
+3. Activity-rules, outcomes, and progression assets own validation, voting, result selection, reflection, and step gates.
+4. Collaboration, grouping, and problem-goal assets own activity mutations and workflow transitions.
+5. Runtime, staged step-template, card, method, and diagram-data assets own rendering and UI event handlers.
 6. `fishbone-svg.js` owns fishbone visualization and export rendering.
 7. `fishbone-bootstrap.js` installs final event listeners and performs the initial render.
 
-These remain ordered classic scripts because the existing document uses inline HTML event attributes and a shared global scope. Converting them to ECMAScript modules would require changing that UI contract. The separation therefore improves navigation and ownership without changing runtime semantics. `fishbone.css` contains the presentation rules exactly as they appeared in the original inline style block.
+These remain ordered classic scripts because the existing document uses inline HTML event attributes and a shared global scope. Converting them to ECMAScript modules would require changing that UI contract. The separation therefore improves navigation and ownership without changing runtime semantics. The stylesheet layers contain the presentation rules in their original order.
 
 ## Server routes
 

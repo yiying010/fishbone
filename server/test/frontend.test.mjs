@@ -3,15 +3,34 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const documentHtml = await readFile(new URL("../../public/fishbone.html", import.meta.url), "utf8");
+const styleFiles = [
+  "fishbone-base.css",
+  "fishbone-layout.css",
+  "fishbone-diagrams.css",
+  "fishbone-activity.css",
+];
 const scriptFiles = [
-  "fishbone-state.js",
-  "fishbone-sync.js",
-  "fishbone-domain.js",
-  "fishbone-workflow.js",
-  "fishbone-ui.js",
+  "fishbone-foundation.js",
+  "fishbone-room-state.js",
+  "fishbone-sync-client.js",
+  "fishbone-sync-loop.js",
+  "fishbone-activity-rules.js",
+  "fishbone-outcomes.js",
+  "fishbone-progression.js",
+  "fishbone-collaboration.js",
+  "fishbone-grouping.js",
+  "fishbone-problem-goal.js",
+  "fishbone-runtime.js",
+  "fishbone-steps-start.js",
+  "fishbone-steps-analysis.js",
+  "fishbone-steps-solution.js",
+  "fishbone-cards.js",
+  "fishbone-methods.js",
+  "fishbone-diagram-data.js",
   "fishbone-svg.js",
   "fishbone-bootstrap.js",
 ];
+await Promise.all(styleFiles.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")));
 const scripts = await Promise.all(
   scriptFiles.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")),
 );
@@ -20,13 +39,16 @@ const scripts = await Promise.all(
 const html = [documentHtml, ...scripts].join("\n");
 
 test("presentation and behavior are separated into ordered frontend assets", () => {
-  assert.match(documentHtml, /<link rel="stylesheet" href="fishbone\.css" \/>/);
   assert.doesNotMatch(documentHtml, /<style(?:\s|>)/);
   assert.doesNotMatch(documentHtml, /<script>(?:.|\s)*<\/script>/);
 
+  const referencedStyles = [
+    ...documentHtml.matchAll(/<link rel="stylesheet" href="([^"]+)" \/>/g),
+  ].map((match) => match[1]);
   const referencedScripts = [...documentHtml.matchAll(/<script src="([^"]+)"><\/script>/g)].map(
     (match) => match[1],
   );
+  assert.deepEqual(referencedStyles, styleFiles);
   assert.deepEqual(referencedScripts, scriptFiles);
 });
 

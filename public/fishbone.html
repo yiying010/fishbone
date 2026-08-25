@@ -97,7 +97,7 @@
     };
     const colors=["#276EF1","#00A676","#D95D39","#7B61FF","#B7791F","#008C95"];
     const risks=["自殺","自傷","傷害自己","不想活","傷人","殺人","暴力","性侵","性暴力","虐待","威脅","勒索","跟蹤","霸凌","不安全","家暴"];
-    let S={step:0,mode:"group",roomCode:"FISH-042",selfId:"self",nameDraft:"",joined:false,autoTts:true,ttsReady:false,lastSpokenStep:0,recordingBy:"",confirmBy:{grouping:"",selected:"",problem:"",right:"",goal:"",outcome:"",feasible:"",reflection:""},sources:[{id:"self",name:"尚未加入",color:colors[0],system:false,joined:false},{id:"group",name:"小組提出",color:"#46515f",system:true,joined:true},{id:"unknown",name:"未指定",color:"#8a8f98",system:true,joined:false}],active:"self",distresses:[],distressesVersion:0,deletedDistressIds:[],topics:[{id:"t1",name:"主題 A"},{id:"t2",name:"主題 B"}],draftTopics:[{id:"dt1",name:"主題 A"},{id:"dt2",name:"主題 B"}],draftAssignments:{},groupProposals:[],groupingVotes:{},groupingVersion:0,groupConfirmVotes:{},groupingOwnConcern:false,groupingConfirmed:"",selectedCandidate:"",problemVotes:{},problemVoteVersion:0,selected:"",problem:"",problemOk:false,problemDetails:[],problemDetailsVersion:0,problemDraft:"",problemDraftHold:false,problemDraftUpdated:false,problemDraftVotes:{},problemRevisionNotes:[],causes:[],causesVersion:0,deletedCauseIds:[],cats:[{id:"c1",name:"大要因 1"},{id:"c2",name:"大要因 2"}],draftCats:[{id:"dc1",name:"大要因 1"},{id:"dc2",name:"大要因 2"}],draftCauseAssignments:{},causeClassProposals:[],causeClassVotes:{},causeClassVersion:0,causeClassConfirmed:"",rightOk:false,rightVotes:{},rightVoteVersion:0,rightNeedsRevision:false,goal:"",goalIdeas:[],goalIdeasVersion:0,goalDraft:"",goalDraftHold:false,goalDraftUpdated:false,goalDraftVotes:{},priority:[],priorityOpen:true,stash:[],methods:[],methodsVersion:0,deletedMethodIds:[],draftMethodCats:[{id:"dmc1",name:"大方法 1"},{id:"dmc2",name:"大方法 2"}],draftMethodAssignments:{},methodClassProposals:[],methodClassVotes:{},methodClassVersion:0,methodClassConfirmed:"",outcomeOk:false,outcomeVotes:{},outcomeVoteVersion:0,outcomeNeedsRevision:false,solutionVotes:{},solutionVoteVersion:0,solutionTie:false,feasible:"",feasibleReason:"",unique:"",uniqueReason:"",reflections:[],reflectionsVersion:0,reflectionSummary:"",reflectionSummaryOk:false,reflection:""};
+    let S={step:0,mode:"group",roomCode:"",createdRoom:"",selfId:"self",nameDraft:"",joined:false,autoTts:true,ttsReady:false,lastSpokenStep:0,recordingBy:"",confirmBy:{grouping:"",selected:"",problem:"",right:"",goal:"",outcome:"",feasible:"",reflection:""},sources:[{id:"self",name:"尚未加入",color:colors[0],system:false,joined:false},{id:"group",name:"小組提出",color:"#46515f",system:true,joined:true},{id:"unknown",name:"未指定",color:"#8a8f98",system:true,joined:false}],active:"self",distresses:[],distressesVersion:0,deletedDistressIds:[],topics:[{id:"t1",name:"主題 A"},{id:"t2",name:"主題 B"}],draftTopics:[{id:"dt1",name:"主題 A"},{id:"dt2",name:"主題 B"}],draftAssignments:{},groupProposals:[],groupingVotes:{},groupingVersion:0,groupConfirmVotes:{},groupingOwnConcern:false,groupingConfirmed:"",selectedCandidate:"",problemVotes:{},problemVoteVersion:0,selected:"",problem:"",problemOk:false,problemDetails:[],problemDetailsVersion:0,problemDraft:"",problemDraftHold:false,problemDraftUpdated:false,problemDraftVotes:{},problemRevisionNotes:[],causes:[],causesVersion:0,deletedCauseIds:[],cats:[{id:"c1",name:"大要因 1"},{id:"c2",name:"大要因 2"}],draftCats:[{id:"dc1",name:"大要因 1"},{id:"dc2",name:"大要因 2"}],draftCauseAssignments:{},causeClassProposals:[],causeClassVotes:{},causeClassVersion:0,causeClassConfirmed:"",rightOk:false,rightVotes:{},rightVoteVersion:0,rightNeedsRevision:false,goal:"",goalIdeas:[],goalIdeasVersion:0,goalDraft:"",goalDraftHold:false,goalDraftUpdated:false,goalDraftVotes:{},priority:[],priorityOpen:true,stash:[],methods:[],methodsVersion:0,deletedMethodIds:[],draftMethodCats:[{id:"dmc1",name:"大方法 1"},{id:"dmc2",name:"大方法 2"}],draftMethodAssignments:{},methodClassProposals:[],methodClassVotes:{},methodClassVersion:0,methodClassConfirmed:"",outcomeOk:false,outcomeVotes:{},outcomeVoteVersion:0,outcomeNeedsRevision:false,solutionVotes:{},solutionVoteVersion:0,solutionTie:false,feasible:"",feasibleReason:"",unique:"",uniqueReason:"",reflections:[],reflectionsVersion:0,reflectionSummary:"",reflectionSummaryOk:false,reflection:""};
     const tabUserId=sessionStorage.getItem("fishboneUserId")||("u-"+Date.now()+"-"+Math.random().toString(16).slice(2));sessionStorage.setItem("fishboneUserId",tabUserId);S.selfId=tabUserId;S.active=tabUserId;S.sources[0].id=tabUserId;
     const roomPrefix="fishbone-room-v2:";let syncMuted=false;const roomChannel=("BroadcastChannel" in window)?new BroadcastChannel("fishbone-room-v2"):null;
     const $=id=>document.getElementById(id), uid=p=>p+"-"+Date.now()+"-"+Math.random().toString(16).slice(2), esc=s=>(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
@@ -149,7 +149,7 @@
        so the reply carries their snapshot, this client merges it and posts again.
        That is what keeps two devices editing at once from losing each other's
        cards without any merge logic living on the server. */
-    const SYNC={base:"",offline:false,session:0,revision:0,serverJson:"",connected:false,status:"尚未加入小組。",pushTimer:null,pushing:false,pushAgain:false,failures:0};
+    const SYNC={base:"",offline:false,session:0,revision:0,serverJson:"",connected:false,status:"尚未加入小組。",pushTimer:null,pushing:false,pushAgain:false,failures:0,token:""};
     /* The app is mounted at an unknown public subpath and is never told what it
        is, so the API base is derived from the address bar: a trailing slash means
        a directory, a page filename means take its directory, anything else is the
@@ -160,6 +160,17 @@
        page this server hands out is fishbone.html. */
     SYNC.base=(function(){let p=location.pathname||"/";if(p.endsWith("/"))return p;let cut=p.lastIndexOf("/"),last=p.slice(cut+1);return /\.x?html?$/i.test(last)?p.slice(0,cut+1):p+"/"})();
     function roomApi(suffix){return SYNC.base+"api/rooms/"+encodeURIComponent(String(S.roomCode||"").trim())+"/"+suffix}
+    /* Joining returns a session token; reading or writing a room needs it. The
+       room code alone is no longer enough, so a request without a token gets the
+       same answer for a room that exists and one that never did. */
+    /* Mirrors the server's canonical form, so the request path and the local
+       cache key do not depend on how the code was typed. The o/i/l mappings are
+       Crockford Base32's: those letters are not in the alphabet, so a student
+       who reads 0 as O still lands in the right room. */
+    const CODE_ALPHABET="0123456789abcdefghjkmnpqrstvwxyz";
+    function canonRoomCode(value){let out="";for(let ch of String(value||"").toLowerCase()){if(ch==="o")ch="0";else if(ch==="i"||ch==="l")ch="1";if(CODE_ALPHABET.includes(ch))out+=ch}return out}
+    function showRoomCode(value){let code=String(value||""),groups=[];for(let at=0;at<code.length;at+=5)groups.push(code.slice(at,at+5));return groups.join("-")}
+    function syncHeaders(sendsJson){let h={accept:"application/json"};if(sendsJson)h["content-type"]="application/json";if(SYNC.token)h["authorization"]="Bearer "+SYNC.token;return h}
     /* Postgres stores the snapshot as jsonb, which does not preserve key order, so
        "did anything actually change" has to be asked of a canonical form.
 
@@ -179,34 +190,60 @@
        snapshot again, quietly undoing a deletion that was meant to be final.
        Rejoining from Step 1 stays available as a deliberate choice. */
     function roomGone(){
-      SYNC.session=0;
+      SYNC.session=0;SYNC.token="";
       if(SYNC.pushTimer){clearTimeout(SYNC.pushTimer);SYNC.pushTimer=null}
       SYNC.pushAgain=false;
       setSyncStatus(false,"這個房間在伺服器上已不存在，可能已被移除或超過保存期限。目前內容仍留在這台裝置，若要繼續請回到 Step 1 重新加入。");
       render();
     }
     function schedulePush(){if(!S.joined||SYNC.offline||!SYNC.session)return;if(SYNC.pushTimer)return;SYNC.pushTimer=setTimeout(()=>{SYNC.pushTimer=null;pushRoom()},250)}
-    async function connectRoom(){
-      if(location.protocol==="file:"){SYNC.offline=true;SYNC.session=0;setSyncStatus(false,"目前以 file:// 開啟，只有這台裝置看得到內容。請改用伺服器網址進行小組活動。");render();return}
-      SYNC.offline=false;let session=++SYNC.session;SYNC.revision=0;SYNC.serverJson="";
+    /* Returns "ok", "not-found", "rate-limited" or "error". The caller decides
+       what to tell the student, because a failure while joining and a failure
+       while already in a room mean different things to them. */
+    async function connectRoom(initial){
+      if(location.protocol==="file:"){SYNC.offline=true;SYNC.session=0;setSyncStatus(false,"目前以 file:// 開啟，只有這台裝置看得到內容。請改用伺服器網址進行小組活動。");render();return "error"}
+      SYNC.offline=false;let session=++SYNC.session;SYNC.revision=0;SYNC.serverJson="";SYNC.token="";
       setSyncStatus(false,"正在連線到小組伺服器…");
       try{
         let res=await fetch(roomApi("join"),{method:"POST",cache:"no-store",headers:{"content-type":"application/json"},body:JSON.stringify({memberId:S.selfId,name:S.nameDraft,step:S.step})});
-        if(SYNC.session!==session)return;
+        if(SYNC.session!==session)return "error";
+        /* 404 and 400 are both "this code will never work": the server answers a
+           missing room and a mistyped one without saying which. */
+        if(res.status===404||res.status===400){SYNC.session=0;setSyncStatus(false,"找不到這個房間碼。");return "not-found"}
+        if(res.status===429){SYNC.session=0;setSyncStatus(false,"嘗試次數過多，請稍候再試。");return "rate-limited"}
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();
-        if(SYNC.session!==session)return;
-        SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});SYNC.failures=0;
+        if(SYNC.session!==session)return "error";
+        SYNC.token=data.token||"";SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});SYNC.failures=0;
         applyRemote(data.snapshot);
         setSyncStatus(true,syncOnlineText());
         pollLoop(session);schedulePush();
+        return "ok";
       }catch(e){
-        if(SYNC.session!==session)return;
+        if(SYNC.session!==session)return "error";
         SYNC.failures++;
         setSyncStatus(false,"還沒連上小組伺服器，內容先留在這台裝置，正在重試。");
         render();
-        setTimeout(()=>{if(SYNC.session===session&&S.joined)connectRoom()},Math.min(15000,800*Math.pow(2,Math.min(5,SYNC.failures))));
+        if(!initial)setTimeout(()=>{if(SYNC.session===session&&S.joined)connectRoom()},Math.min(15000,800*Math.pow(2,Math.min(5,SYNC.failures))));
+        return "error";
       }
+    }
+    /* A 404 on a running session means either the room is gone or this token is
+       no longer valid; the server answers both identically on purpose. Asking to
+       join again separates them here, where it is safe to know. */
+    async function recoverSession(session){
+      if(SYNC.session!==session)return false;
+      try{
+        let res=await fetch(roomApi("join"),{method:"POST",cache:"no-store",headers:{"content-type":"application/json"},body:JSON.stringify({memberId:S.selfId,name:S.nameDraft,step:S.step})});
+        if(SYNC.session!==session)return false;
+        if(res.status===404||res.status===400){roomGone();return false}
+        if(!res.ok)return false;
+        let data=await res.json();
+        if(SYNC.session!==session)return false;
+        SYNC.token=data.token||"";SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
+        applyRemote(data.snapshot);
+        return true;
+      }catch(e){return false}
     }
     /* Long poll: the server holds the request until the room changes, so a card
        submitted on one phone shows up on the others within a fraction of a second
@@ -215,9 +252,14 @@
       while(SYNC.session===session&&S.joined&&!SYNC.offline){
         try{
           let began=Date.now();
-          let res=await fetch(roomApi("state")+"?since="+SYNC.revision+"&wait=1&member="+encodeURIComponent(S.selfId)+"&step="+S.step,{cache:"no-store",headers:{accept:"application/json"}});
+          let res=await fetch(roomApi("state")+"?since="+SYNC.revision+"&wait=1&step="+S.step,{cache:"no-store",headers:syncHeaders(false)});
           if(SYNC.session!==session)return;
-          if(res.status===404){roomGone();return}
+          if(res.status===404){
+            if(await recoverSession(session))continue;
+            if(SYNC.session!==session)return;
+            throw new Error("HTTP 404");
+          }
+          if(res.status===429)setSyncStatus(false,"伺服器暫時限制了請求，稍後會自動再試。");
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
           if(SYNC.session!==session)return;
@@ -254,9 +296,14 @@
           if(SYNC.session!==session)return;
           let snap=sharedSnapshot(),json=canonJson(snap);
           if(json===SYNC.serverJson)return;
-          let res=await fetch(roomApi("state"),{method:"POST",cache:"no-store",headers:{"content-type":"application/json"},body:JSON.stringify({memberId:S.selfId,step:S.step,baseRevision:SYNC.revision,snapshot:snap})});
+          let res=await fetch(roomApi("state"),{method:"POST",cache:"no-store",headers:syncHeaders(true),body:JSON.stringify({step:S.step,baseRevision:SYNC.revision,snapshot:snap})});
           if(SYNC.session!==session)return;
-          if(res.status===404){roomGone();return}
+          if(res.status===404){
+            if(await recoverSession(session))continue;
+            if(SYNC.session!==session)return;
+            throw new Error("HTTP 404");
+          }
+          if(res.status===429){setSyncStatus(false,"伺服器暫時限制了請求，稍後會自動再試。");throw new Error("HTTP 429")}
           if(res.status===409){let other=await res.json();SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
@@ -282,7 +329,7 @@
     async function refreshFromServer(){
       if(!S.joined||SYNC.offline||!SYNC.session)return;
       try{
-        let res=await fetch(roomApi("state"),{cache:"no-store",headers:{accept:"application/json"}});
+        let res=await fetch(roomApi("state"),{cache:"no-store",headers:syncHeaders(false)});
         if(!res.ok)return;
         let data=await res.json();
         SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
@@ -291,14 +338,14 @@
     }
     function saveArtifact(format,filename,content){
       if(!S.joined||SYNC.offline||!SYNC.session)return;
-      try{fetch(roomApi("artifacts"),{method:"POST",keepalive:true,headers:{"content-type":"application/json"},body:JSON.stringify({memberId:S.selfId,format,filename,content})}).catch(()=>{})}catch(e){}
+      try{fetch(roomApi("artifacts"),{method:"POST",keepalive:true,headers:syncHeaders(true),body:JSON.stringify({format,filename,content})}).catch(()=>{})}catch(e){}
     }
     /* Last-gasp flush: the 250ms debounce above can still be in flight when the
        page is closed, and keepalive lets the browser finish the request anyway. */
     window.addEventListener("pagehide",()=>{
       if(!S.joined||SYNC.offline||!SYNC.session)return;
       let snap=sharedSnapshot();if(canonJson(snap)===SYNC.serverJson)return;
-      try{fetch(roomApi("state"),{method:"POST",keepalive:true,headers:{"content-type":"application/json"},body:JSON.stringify({memberId:S.selfId,step:S.step,baseRevision:SYNC.revision,snapshot:snap})}).catch(()=>{})}catch(e){}
+      try{fetch(roomApi("state"),{method:"POST",keepalive:true,headers:syncHeaders(true),body:JSON.stringify({step:S.step,baseRevision:SYNC.revision,snapshot:snap})}).catch(()=>{})}catch(e){}
     });
     function lockedTools(type,id){return `<div class="readOnlyNote">這是其他成員提出的內容，這裡先以唯讀呈現。</div><div class="row wrap"><button class="secondary" onclick="copyAsMine('${type}','${id}')">複製成我的卡片</button><button class="secondary" onclick="suggestEdit('${type}','${id}')">提出修改建議</button></div>`}
     function suggestEdit(type,id){let note=prompt("請寫下想建議修改的地方：");if(note)alert("已收到修改建議。正式多人版會將建議送給原提出者或小組代表確認。")}
@@ -314,7 +361,7 @@
     function agentFeedback(){let msg="";if(S.step===7){let mine=ownActiveCauses();if(!mine.length)msg="先提出一個你想到的可能原因就好，不用急著判斷對不對。";else if(mine.length===1)msg="如果還想補充，可以換角度想：人、環境、時間、規則或工具。";else if(ownCausesHighlyRepeated())msg="目前幾個原因有點相近，下一個可以換角度想：人、環境、時間、規則或工具。"}if(S.step===5&&S.problem.trim()&&!/(在|因為|時|遇到|無法|不能|困難|問題|情境)/.test(S.problem))msg="主要問題還可以更清楚。請只補一點：誰在什麼情境遇到什麼困難？";if(S.step===8){let pending=S.causes.filter(c=>!["已確認為原因","已移到方法暫存區","暫不使用"].includes(c.status)).length;if(pending)msg=`還有 ${pending} 張原因卡需要確認、修改、移到方法暫存區或暫不使用。`}if(S.step===11&&S.goal.trim()){let vague=/^(變好|更好|努力|更努力|改善|加油)$/.test(S.goal.trim());if(vague)msg="這個目標比較像口號。請補充想改善的具體情況，或說明它主要回應哪些原因。";else if(usableCauses().length&&!S.priority.length)msg="優先原因可以不選；如果已經知道目標主要想處理哪些原因，也可以勾選作為參考。"}if(S.step===13){let m=S.methods.filter(x=>isOwnCard(x)&&x.status!=="暫不納入").find(x=>/^(努力|更努力|認真|更認真|改善|變好|加油|專心|提高專注力)$/.test(String(x.text||"").trim()));if(m)msg="這個方法還有點像口號。可以只補一點：誰來做、什麼時候做、具體怎麼做，或需要什麼資源？"}if(S.step===14){let m=S.methods.filter(x=>x.status!=="正式方法"&&x.status!=="暫不納入").find(x=>!x.causes.length||!x.effect.trim());if(m)msg="還有方法需要補齊原因連結或目標支持說明。請先處理一張方法卡，不需要一次改完全部。"}return msg?`<div class="teacherNudge"><strong>老師提醒</strong>${esc(msg)}</div>`:""}
     function problemClear(t){t=(t||"").trim();return t.length>=8&&/(在|時|遇到|無法|不能|困難|問題|常常|容易)/.test(t)}
     function goalClear(t){t=(t||"").trim();return t.length>=6&&!/^(變好|更好|努力|更努力|改善|加油)$/.test(t)}
-    function collabPanel(){let members=S.sources.filter(s=>!s.system);return `<section class="roomBox"><h3>小組狀態</h3><p>小組房間碼</p><div class="roomCode">${esc(S.roomCode||"尚未輸入")}</div><div class="memberList">${members.map(s=>`<div class="memberRow"><span class="dot" style="background:${s.color}"></span><span>${esc(s.name)}</span><span class="small">${s.joined?"已加入":"尚未加入"}</span></div>`).join("")}</div>${groupStatus()}<p class="${SYNC.connected?"syncNote ok":"syncNote"}" id="syncStatus">${esc(SYNC.status)}</p></section>`}
+    function collabPanel(){let members=S.sources.filter(s=>!s.system);return `<section class="roomBox"><h3>小組狀態</h3><p>小組房間碼</p><div class="roomCode">${esc(showRoomCode(S.roomCode)||"尚未輸入")}</div><div class="memberList">${members.map(s=>`<div class="memberRow"><span class="dot" style="background:${s.color}"></span><span>${esc(s.name)}</span><span class="small">${s.joined?"已加入":"尚未加入"}</span></div>`).join("")}</div>${groupStatus()}<p class="${SYNC.connected?"syncNote ok":"syncNote"}" id="syncStatus">${esc(SYNC.status)}</p></section>`}
     function memberIds(){return joinedMembers().map(s=>s.id)}
     function roundForVotes(votes){if(votes===S.groupingVotes)return S.groupingRound||1;if(votes===S.problemVotes)return S.problemRound||1;if(votes===S.problemDraftVotes)return S.problemDraftRound||1;if(votes===S.goalDraftVotes)return S.goalDraftRound||1;if(votes===S.causeClassVotes)return S.causeClassRound||1;if(votes===S.rightVotes)return S.rightRound||1;if(votes===S.methodClassVotes)return S.methodClassRound||1;if(votes===S.outcomeVotes)return S.outcomeRound||1;if(votes===S.solutionVotes)return S.solutionRound||1;return 1}
     function voteValue(votes,member){let v=(votes||{})[member],round=roundForVotes(votes);if(v&&typeof v==="object")return v.round===round?v.value:"";return v||""}
@@ -537,9 +584,47 @@
     function textAreaWithVoice(id,value,placeholder,onSaveLabel,onSaveCode){return `<div class="speakBox"><textarea id="${id}" placeholder="${placeholder}">${esc(value||"")}</textarea><div class="speakControls"><button class="secondary" onclick="startVoice('${id}')">語音輸入</button><button onclick="${onSaveCode}">${onSaveLabel}</button></div><p class="voiceStatus" id="voiceStatus">${voiceHelp(false)}</p></div>`}
     function screen(){if(S.step===0)return step0();return [step1,step2,step3,step4,step5,step6,step7,step8,step9,step10,step11,step12,step13,step14,step15,step16,step17,step18,step19][S.step-1]()}
     function startActivity(){markInteraction();S.lastSpokenStep=0;S.step=1;render()}
-    function joinActivity(){let name=$("joinName").value.trim(),room=$("joinRoom").value.trim();if(!name||!room){showGate("請先輸入姓名或暱稱與小組房間碼。");return}S.nameDraft=name;S.roomCode=room;S.joined=true;S.active=S.selfId;loadRoom(room);ensureSource(S.selfId,name,colors[joinedMembers().length%colors.length]);S.active=S.selfId;S.step=2;markInteraction();render();if(roomChannel)roomChannel.postMessage({room:S.roomCode,from:S.selfId,kind:"sync-request"});connectRoom()}
+    /* Joining now has to succeed on the server before the student is in the
+       room: an unknown code no longer quietly creates one. S.joined is set
+       first because pollLoop stops while it is false, and rolled back if the
+       server turns the code away. */
+    async function joinActivity(){
+      let name=$("joinName").value.trim(),typed=$("joinRoom").value.trim(),room=canonRoomCode(typed);
+      if(!name||!typed){showGate("請先輸入姓名或暱稱與小組房間碼。");return}
+      if(room.length<8){showGate("房間碼看起來不正確，請向老師再確認一次。");return}
+      let wasJoined=S.joined,wasRoom=S.roomCode;
+      S.nameDraft=name;S.roomCode=room;S.joined=true;S.active=S.selfId;
+      let outcome=await connectRoom(true);
+      if(outcome!=="ok"){
+        S.joined=wasJoined;S.roomCode=wasRoom;
+        // render() clears the gate message, so it has to come first.
+        render();
+        showGate(outcome==="not-found"?"找不到這個房間碼，請再確認一次。房間碼由老師建立後提供。":outcome==="rate-limited"?"嘗試次數過多，請稍候一分鐘再試。":"目前連不上小組伺服器，請確認網路後再試一次。");
+        return;
+      }
+      loadRoom(room);ensureSource(S.selfId,name,colors[joinedMembers().length%colors.length]);
+      S.active=S.selfId;S.step=2;markInteraction();
+      if(roomChannel)roomChannel.postMessage({room:S.roomCode,from:S.selfId,kind:"sync-request"});
+      render();schedulePush();
+    }
+    /* Teachers create the room here and read the code off the projector. Codes
+       are generated by the server precisely so that nobody can pick 六年三班. */
+    async function createRoom(){
+      markInteraction();
+      if(location.protocol==="file:"){showGate("目前以 file:// 開啟，無法建立房間。請改用伺服器網址。");return}
+      let btn=$("createRoomBtn");if(btn)btn.disabled=true;
+      try{
+        let res=await fetch(SYNC.base+"api/rooms",{method:"POST",cache:"no-store",headers:{"content-type":"application/json"},body:"{}"});
+        if(res.status===429){showGate("建立房間的次數過多，請稍後再試。");return}
+        if(!res.ok)throw new Error("HTTP "+res.status);
+        let data=await res.json();
+        S.roomCode=canonRoomCode(data.room||"");S.createdRoom=data.displayCode||showRoomCode(S.roomCode);
+        render();
+      }catch(e){showGate("目前無法建立房間，請確認網路後再試一次。")}
+      finally{if(btn)btn.disabled=false}
+    }
     function step0(){return `<section class="startPanel"><div><p class="eyebrow">創意萬事通</p><h2>魚骨洞天</h2><p>準備好後，按下開始活動。</p><button onclick="startActivity()">開始活動</button></div></section>`}
-    function step1(){let selfName=S.joined?src(S.selfId).name:(S.nameDraft||"");return panel("加入活動／加入小組","",`<div class="joinBox"><label>你的姓名或暱稱</label><input id="joinName" value="${esc(selfName==="尚未加入"?"":selfName)}" placeholder="例如：小安"><label>小組房間碼／活動代碼</label><input id="joinRoom" value="${esc(S.roomCode)}" placeholder="例如：FISH-042"><button onclick="joinActivity()">加入</button>${S.joined?`<p class="joinedNote">已加入 ${esc(S.roomCode)}，你新增的卡片會標記為 ${esc(src(S.selfId).name)}。</p>`:""}</div>`)}
+    function step1(){let selfName=S.joined?src(S.selfId).name:(S.nameDraft||"");return panel("加入活動／加入小組","",`<div class="joinBox"><label>你的姓名或暱稱</label><input id="joinName" value="${esc(selfName==="尚未加入"?"":selfName)}" placeholder="例如：小安"><label>小組房間碼／活動代碼</label><input id="joinRoom" value="${esc(showRoomCode(S.roomCode))}" placeholder="例如：k7m2x-9qpwd"><button onclick="joinActivity()">加入</button>${S.joined?`<p class="joinedNote">已加入 ${esc(showRoomCode(S.roomCode))}，你新增的卡片會標記為 ${esc(src(S.selfId).name)}。</p>`:""}</div><section class="surface"><h3>老師：建立新房間</h3><p class="small">房間碼由伺服器產生，建立後投影給全組抄寫。不再使用自訂代碼，因為班級名稱這類代碼很容易被猜到，而房間裡是同學寫下的生活困擾。</p>${S.createdRoom?`<div class="roomCode">${esc(S.createdRoom)}</div><p class="small">已填入上方欄位。你自己也要輸入姓名後按加入。</p>`:""}<button class="secondary" id="createRoomBtn" onclick="createRoom()">建立新房間</button></section>`)}
     function step2(){let mine=S.distresses.filter(d=>isOwnCard(d));return panel("","",`<section class="surface"><h3>提出我的生活困擾</h3>${speakBox("distress","說出或輸入一個生活中想分析的困擾","確認提出困擾")}</section>${mine.length?`<section class="surface"><h3>我已提出的困擾</h3><div class="cardGrid">${mine.map(d=>distressCard(d)).join("")}</div></section>`:""}`)}
     function groupingProposalCard(p){let revote=groupingNeedsRevote(),chosen=!revote&&voteValue(S.groupingVotes||{},actor())===p.id,counts=voteCounts(S.groupProposals||[],S.groupingVotes||{}),official=S.groupingConfirmed===p.id;return `<article class="card candidateCard ${official?'ok':''}"><div class="meta">${badge(p.source)}<span class="voteCount">${counts[p.id]||0} 票</span>${official?'<span class="badge" style="border-color:#12623d;color:#12623d">正式分群</span>':""}</div><h3>${esc(groupingProposalTitle(p))}</h3>${(p.groups||[]).map(g=>`<div class="surface slim"><strong>${esc(g.name)}</strong><ul>${(g.ids||[]).map(id=>`<li>${esc((S.distresses.find(d=>d.id===id)||{}).text||"困擾")}</li>`).join("")}</ul></div>`).join("")}<div class="voteBar"><button class="${chosen?'selected':'secondary'}" onclick="voteGrouping('${p.id}')">${revote?"重新投這一版":chosen?"已投這一版":"投這一版"}</button></div></article>`}
     function step3(){let count=groupDistressCount();if(count<=1){let waiting=joinedMembers().length>1;return panel("","",`${waiting?'<div class="warn">目前小組困擾池尚未同步到多張困擾，請等待或刷新小組困擾池後再判斷。</div><button class="secondary" onclick="requestRoomSync();render()">刷新小組困擾池</button>':'<div class="confirmedBox">目前只有一張困擾，可以直接進入下一步。</div>'}<div class="cardGrid">${S.distresses.map(d=>distressCard(d)).join("")}</div>`)}ensureDraftGrouping();let ungrouped=S.distresses.filter(d=>!S.draftAssignments[d.id]);return panel("","",`${S.groupingConfirmed?'<div class="confirmedBox">已選出正式分群，可以進入下一步。</div>':""}<section class="surface"><h3>小組困擾卡池</h3><div class="cardGrid">${S.distresses.map(d=>mini("distress",d)).join("")}</div></section><section class="surface"><h3>我的分群草稿</h3><div class="add"><input id="add-draft-topic" placeholder="主題名稱"><button class="secondary" onclick="startVoice('add-draft-topic')">語音輸入</button><button onclick="addDraftTopic()">新增主題</button></div><p class="voiceStatus" id="voiceStatus">${voiceHelp(false)}</p><div class="columns classifyColumns"><div class="drop" ondragover="event.preventDefault()" ondrop="drop(event,'topic','')"><h3>尚未分群</h3>${ungrouped.map(d=>mini("distress",d)).join("")||'<p class="small">目前沒有未分群困擾。</p>'}</div>${S.draftTopics.map(t=>`<div class="drop" ondragover="event.preventDefault()" ondrop="drop(event,'topic','${t.id}')"><div class="classifyControls"><input id="topic-${t.id}" value="${esc(t.name)}" onchange="renameDraftTopic('${t.id}',this.value)"><div class="classifyActions"><button class="secondary" onclick="startVoice('topic-${t.id}')">語音輸入</button><button class="secondary" onclick="removeDraftTopic('${t.id}')">刪除主題</button></div></div>${S.distresses.filter(d=>S.draftAssignments[d.id]===t.id).map(d=>mini("distress",d)).join("")}</div>`).join("")}</div><button onclick="submitGrouping()">提交我的分群結果</button></section><section class="surface"><h3>候選分群版本</h3>${groupingVoteNotice()}<div class="cardGrid">${(S.groupProposals||[]).map(p=>groupingProposalCard(p)).join("")||'<p class="small">還沒有候選分群版本。</p>'}</div></section>`)}

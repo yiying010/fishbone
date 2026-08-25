@@ -1,6 +1,8 @@
+import { createHash, randomBytes } from "node:crypto";
 import { projectSnapshot } from "../domain/projection.ts";
 import type { Snapshot } from "../domain/snapshot.ts";
 import { withTransaction, type Pool } from "../db/pool.ts";
+import { generateRoomCode } from "./codes.ts";
 
 export interface RoomState {
   revision: number;
@@ -32,29 +34,6 @@ export class RoomCodeError extends Error {}
  */
 export class RoomNotFoundError extends Error {}
 
-/**
- * Room codes are typed by students on a phone. Normalising whitespace and
- * matching case-insensitively is the difference between a group finding each
- * other and silently sitting in two different rooms.
- */
-export function normalizeRoomCode(input: unknown, maxLength: number): string {
-  if (typeof input !== "string") throw new RoomCodeError("room code must be a string");
-  const code = input.trim().replace(/\s+/g, " ");
-  if (code === "") throw new RoomCodeError("room code must not be empty");
-  if (code.length > maxLength) throw new RoomCodeError(`room code must be at most ${maxLength} characters`);
-  if (Array.from(code).some((ch) => (ch.codePointAt(0) ?? 0) < 0x20 || ch.codePointAt(0) === 0x7f)) {
-    throw new RoomCodeError("room code must not contain control characters");
-  }
-  // The code travels as one URL path segment. A slash or percent survives
-  // encodeURIComponent but not the proxy in front of this service, which would
-  // turn a typo into an unexplained 404 instead of a message a student can act
-  // on. Verified against nginx, not assumed.
-  if (/[\\/%?#]/.test(code)) {
-    throw new RoomCodeError("room code must not contain / \\ % ? or #");
-  }
-  return code;
-}
-
 export function normalizeMemberId(input: unknown): string {
   if (typeof input !== "string") throw new RoomCodeError("memberId must be a string");
   const id = input.trim();
@@ -70,6 +49,24 @@ interface RoomRow {
   current_step: number;
 }
 
+export interface JoinResult extends RoomState {
+  /** Returned once, at join. Only its digest is stored. */
+  token: string;
+}
+
+export interface AuthenticatedMember {
+  memberId: string;
+  roomId: number;
+}
+
+/**
+ * Sessions are stored as a digest so that a leaked database dump does not hand
+ * over live sessions as well as the rooms they open.
+ */
+function hashToken(token: string): Buffer {
+  return createHash("sha256").update(token, "utf8").digest();
+}
+
 export class RoomStore {
   // Written out rather than as a parameter property: Node's strip-only
   // TypeScript support cannot erase those, and `npm run dev` / `npm run migrate`
@@ -81,16 +78,39 @@ export class RoomStore {
   }
 
   /**
-   * Creates the room if the code has never been used, and makes sure the
-   * caller has a member row. Returns whatever state already exists so the
-   * client can merge it into its own.
+   * Creates a room under a fresh server-generated code.
+   *
+   * Rooms are only ever created here. Joining does not create one, so a POST to
+   * a guessed code cannot bring a room into existence, and every code that
+   * exists came from a CSPRNG rather than from someone naming their class.
    */
-  async join(code: string, memberId: string, displayName: string, step: number): Promise<RoomState> {
-    return withTransaction(this.pool, async (client) => {
-      await client.query(
+  async createRoom(codeLength: number): Promise<string> {
+    // A collision at 50 bits is not a thing that happens, but the unique index
+    // is the authority, not that assumption.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = generateRoomCode(codeLength);
+      const { rowCount } = await this.pool.query(
         `insert into rooms (code) values ($1) on conflict (lower(code)) do nothing`,
         [code],
       );
+      if ((rowCount ?? 0) > 0) return code;
+    }
+    throw new Error("could not allocate an unused room code");
+  }
+
+  /**
+   * Joins an existing room and issues this member a session token. Returns null
+   * when there is no such room; the caller answers that indistinguishably from
+   * a bad token.
+   */
+  async join(
+    code: string,
+    memberId: string,
+    displayName: string,
+    step: number,
+    sessionTtlHours: number,
+  ): Promise<JoinResult | null> {
+    return withTransaction(this.pool, async (client) => {
       const { rows } = await client.query<RoomRow>(
         `update rooms set last_activity_at = now()
           where lower(code) = lower($1)
@@ -98,22 +118,56 @@ export class RoomStore {
         [code],
       );
       const room = rows[0];
-      if (room === undefined) throw new Error(`room ${code} vanished between insert and update`);
+      if (room === undefined) return null;
 
+      const token = randomBytes(32).toString("base64url");
       await client.query(
-        `insert into members (room_id, member_id, display_name, has_joined, current_step)
-         values ($1, $2, $3, true, $4)
+        `insert into members (room_id, member_id, display_name, has_joined, current_step,
+                              session_token_hash, session_expires_at)
+         values ($1, $2, $3, true, $4, $5, now() + make_interval(hours => $6::int))
          on conflict (room_id, member_id) do update
            set display_name = case when excluded.display_name = '' then members.display_name
                                    else excluded.display_name end,
-               has_joined   = true,
-               current_step = greatest(members.current_step, excluded.current_step),
-               last_seen_at = now()`,
-        [room.id, memberId, displayName, step],
+               has_joined         = true,
+               current_step       = greatest(members.current_step, excluded.current_step),
+               last_seen_at       = now(),
+               session_token_hash = excluded.session_token_hash,
+               session_expires_at = excluded.session_expires_at`,
+        [room.id, memberId, displayName, step, hashToken(token), sessionTtlHours],
       );
 
-      return { revision: room.revision, snapshot: room.snapshot ?? {}, currentStep: room.current_step };
+      return {
+        token,
+        revision: room.revision,
+        snapshot: room.snapshot ?? {},
+        currentStep: room.current_step,
+      };
     });
+  }
+
+  /**
+   * Resolves a bearer token to the member who holds it, within one room.
+   *
+   * Also slides the expiry and marks the member as seen, so a lesson that runs
+   * longer than the session lifetime does not log a class out mid-activity, and
+   * so a member who only reads still shows as present.
+   */
+  async authenticate(code: string, token: string, sessionTtlHours: number): Promise<AuthenticatedMember | null> {
+    if (token === "") return null;
+    const { rows } = await this.pool.query<{ member_id: string; room_id: number }>(
+      `update members m
+          set session_expires_at = now() + make_interval(hours => $3::int),
+              last_seen_at       = now()
+         from rooms r
+        where r.id = m.room_id
+          and lower(r.code) = lower($1)
+          and m.session_token_hash = $2
+          and m.session_expires_at > now()
+        returning m.member_id, m.room_id`,
+      [code, hashToken(token), sessionTtlHours],
+    );
+    const member = rows[0];
+    return member === undefined ? null : { memberId: member.member_id, roomId: member.room_id };
   }
 
   async read(code: string): Promise<RoomState | null> {
@@ -179,7 +233,7 @@ export class RoomStore {
       );
       const room = rows[0];
       if (room === undefined) {
-        throw new RoomNotFoundError(`room ${code} does not exist; join it first`);
+        throw new RoomNotFoundError("no such room");
       }
 
       if (room.revision !== baseRevision) {
@@ -222,7 +276,7 @@ export class RoomStore {
         [code],
       );
       const room = rows[0];
-      if (room === undefined) throw new RoomNotFoundError(`room ${code} does not exist; join it first`);
+      if (room === undefined) throw new RoomNotFoundError("no such room");
 
       const { rows: inserted } = await client.query<{ id: number }>(
         `insert into artifacts (room_id, revision, format, filename, content, exported_by)

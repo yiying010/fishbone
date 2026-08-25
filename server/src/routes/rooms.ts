@@ -2,28 +2,45 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppConfig } from "../config.ts";
 import { SnapshotError, assertSnapshot, withoutNul } from "../domain/snapshot.ts";
+import { RoomCodeFormatError, formatRoomCode, normalizeRoomCode } from "../rooms/codes.ts";
 import {
   RoomCodeError,
   RoomNotFoundError,
   normalizeMemberId,
-  normalizeRoomCode,
+  type AuthenticatedMember,
   type RoomStore,
 } from "../rooms/store.ts";
 import type { RoomNotifier } from "../rooms/notifier.ts";
+import type { RateLimiter } from "../rate-limit.ts";
+
+export interface Limiters {
+  /** Everything under /api, per client address. Generous; only bounds a single source. */
+  requests: RateLimiter | null;
+  /** Failed room lookups, per client address. This is the one that stops enumeration. */
+  lookupFailures: RateLimiter | null;
+  /** Room creation, per client address. */
+  roomCreates: RateLimiter | null;
+}
 
 interface Deps {
   config: AppConfig;
   store: RoomStore;
   notifier: RoomNotifier;
+  limiters: Limiters;
 }
 
 const MAX_DISPLAY_NAME = 64;
 
-export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
-  const { config, store, notifier } = deps;
+/**
+ * The single answer given whenever a caller does not hold a valid session for a
+ * room, whether the room is missing, the token is wrong, or the token expired.
+ * It carries no room code and no detail, because the difference between those
+ * cases is exactly what a scan of the code space would be looking for.
+ */
+const NOT_FOUND = Object.freeze({ error: "room_not_found" });
 
-  const code = (request: FastifyRequest): string =>
-    normalizeRoomCode((request.params as { code?: string }).code, config.roomCodeMaxLength);
+export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
+  const { config, store, notifier, limiters } = deps;
 
   const body = (request: FastifyRequest): Record<string, unknown> => {
     const value = request.body;
@@ -41,27 +58,115 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
   const displayName = (value: unknown): string =>
     typeof value === "string" ? withoutNul(value).trim().slice(0, MAX_DISPLAY_NAME) : "";
 
+  const bearer = (request: FastifyRequest): string => {
+    const header = request.headers["authorization"];
+    return typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  };
+
+  const tooMany = (reply: FastifyReply, retryAfterSeconds: number) => {
+    reply.code(429).header("retry-after", String(retryAfterSeconds)).header("cache-control", "no-store");
+    return { error: "rate_limited", retryAfterSeconds };
+  };
+
+  /**
+   * Spends one unit of the failed-lookup budget and answers. Over budget the
+   * answer is 429 instead of 404, which still says nothing about whether the
+   * room exists.
+   */
+  const notFound = (request: FastifyRequest, reply: FastifyReply) => {
+    const spent = limiters.lookupFailures?.take(request.ip);
+    if (spent && !spent.allowed) return tooMany(reply, spent.retryAfterSeconds);
+    reply.code(404).header("cache-control", "no-store");
+    return NOT_FOUND;
+  };
+
+  /**
+   * Runs before anything touches the database.
+   *
+   * The failed-lookup budget is only pre-checked for callers that present no
+   * token at all. A whole class shares one school NAT address, so pre-checking
+   * it for everyone would let one student's typos lock their classmates out of
+   * a room they are already in. A caller holding a valid session is never
+   * turned away by that budget; one holding a junk token pays for a lookup and
+   * then meets the budget on the way out.
+   */
+  const gate = (request: FastifyRequest, reply: FastifyReply): object | null => {
+    const overall = limiters.requests?.take(request.ip);
+    if (overall && !overall.allowed) return tooMany(reply, overall.retryAfterSeconds);
+    if (bearer(request) === "") {
+      const failures = limiters.lookupFailures?.peek(request.ip);
+      if (failures && !failures.allowed) return tooMany(reply, failures.retryAfterSeconds);
+    }
+    return null;
+  };
+
+  /**
+   * Resolves the room code and the caller's session together, because every
+   * failure among them has to look the same from outside.
+   */
+  const authenticate = async (
+    request: FastifyRequest,
+  ): Promise<{ roomCode: string; member: AuthenticatedMember } | null> => {
+    const roomCode = normalizeRoomCode((request.params as { code?: string }).code);
+    const member = await store.authenticate(roomCode, bearer(request), config.sessionTtlHours);
+    return member === null ? null : { roomCode, member };
+  };
+
+  /**
+   * Creates a room and hands back its code. Rooms exist only because of this
+   * route: joining an unknown code fails rather than bringing one into being,
+   * so no code is ever chosen by a person.
+   */
+  app.post("/api/rooms", async (request, reply) => {
+    const overall = limiters.requests?.take(request.ip);
+    if (overall && !overall.allowed) return tooMany(reply, overall.retryAfterSeconds);
+    const creates = limiters.roomCreates?.take(request.ip);
+    if (creates && !creates.allowed) return tooMany(reply, creates.retryAfterSeconds);
+
+    const code = await store.createRoom(config.roomCodeLength);
+    reply.code(201).header("cache-control", "no-store");
+    return { room: code, displayCode: formatRoomCode(code) };
+  });
+
   app.post("/api/rooms/:code/join", async (request, reply) => {
-    const roomCode = code(request);
+    const limited = gate(request, reply);
+    if (limited) return limited;
+
+    const roomCode = normalizeRoomCode((request.params as { code?: string }).code);
     const payload = body(request);
     const memberId = normalizeMemberId(payload["memberId"]);
-    const state = await store.join(roomCode, memberId, displayName(payload["name"]), step(payload["step"]));
+
+    const joined = await store.join(
+      roomCode,
+      memberId,
+      displayName(payload["name"]),
+      step(payload["step"]),
+      config.sessionTtlHours,
+    );
+    if (joined === null) return notFound(request, reply);
+
     reply.header("cache-control", "no-store");
-    return { room: roomCode, memberId, ...state };
+    return { room: roomCode, memberId, ...joined };
   });
 
   app.get("/api/rooms/:code/state", async (request, reply) => {
-    const roomCode = code(request);
-    const query = request.query as { since?: string; wait?: string; member?: string; step?: string };
+    const limited = gate(request, reply);
+    if (limited) return limited;
+
+    const session = await authenticate(request);
+    if (session === null) return notFound(request, reply);
+    const { roomCode, member } = session;
+
+    const query = request.query as { since?: string; wait?: string; step?: string };
     const since = Number.parseInt(query.since ?? "", 10);
     const hasSince = Number.isFinite(since);
     const wantsHold = query.wait === "1" && config.longPollMs > 0;
 
-    if (typeof query.member === "string" && query.member.trim() !== "") {
-      // Recording presence is secondary to showing the room. If it fails, the
+    if (query.step !== undefined) {
+      // Recording progress is secondary to showing the room. If it fails, the
       // student should still see their group's work rather than a 500.
       await store
-        .touchMember(roomCode, normalizeMemberId(query.member), step(query.step))
+        .touchMember(roomCode, member.memberId, step(query.step))
         .catch((error: unknown) => request.log.warn({ err: error }, "touchMember failed; serving state anyway"));
     }
 
@@ -70,10 +175,7 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
     reply.header("x-accel-buffering", "no");
 
     const first = await store.read(roomCode);
-    if (first === null) {
-      reply.code(404);
-      return { error: "room_not_found", room: roomCode };
-    }
+    if (first === null) return notFound(request, reply);
     if (!hasSince || first.revision !== since) {
       return { room: roomCode, ...first };
     }
@@ -86,17 +188,19 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
       return { room: roomCode, revision: since, currentStep: first.currentStep, unchanged: true };
     }
     const latest = await store.read(roomCode);
-    if (latest === null) {
-      reply.code(404);
-      return { error: "room_not_found", room: roomCode };
-    }
+    if (latest === null) return notFound(request, reply);
     return { room: roomCode, ...latest };
   });
 
   app.post("/api/rooms/:code/state", async (request, reply) => {
-    const roomCode = code(request);
+    const limited = gate(request, reply);
+    if (limited) return limited;
+
+    const session = await authenticate(request);
+    if (session === null) return notFound(request, reply);
+    const { roomCode, member } = session;
+
     const payload = body(request);
-    const memberId = payload["memberId"] === undefined ? null : normalizeMemberId(payload["memberId"]);
     const baseRevision = Math.trunc(Number(payload["baseRevision"]));
     if (!Number.isFinite(baseRevision) || baseRevision < 0) {
       reply.code(400);
@@ -104,7 +208,8 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
     }
     const snapshot = assertSnapshot(payload["snapshot"], config.maxSnapshotBytes);
 
-    const result = await store.write(roomCode, memberId, step(payload["step"]), baseRevision, snapshot);
+    // The author is the authenticated member, never whatever the body claims.
+    const result = await store.write(roomCode, member.memberId, step(payload["step"]), baseRevision, snapshot);
     reply.header("cache-control", "no-store");
 
     if (result.status === "conflict") {
@@ -118,7 +223,13 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
   });
 
   app.post("/api/rooms/:code/artifacts", async (request, reply) => {
-    const roomCode = code(request);
+    const limited = gate(request, reply);
+    if (limited) return limited;
+
+    const session = await authenticate(request);
+    if (session === null) return notFound(request, reply);
+    const { roomCode, member } = session;
+
     const payload = body(request);
     const format = String(payload["format"] ?? "").trim().toLowerCase();
     if (!["text", "svg"].includes(format)) {
@@ -139,7 +250,7 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
       format,
       filename: typeof payload["filename"] === "string" ? withoutNul(payload["filename"]).slice(0, 200) : "",
       content,
-      exportedBy: payload["memberId"] === undefined ? null : normalizeMemberId(payload["memberId"]),
+      exportedBy: member.memberId,
     });
     reply.code(201).header("cache-control", "no-store");
     return { room: roomCode, ...saved };
@@ -150,10 +261,19 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
   app.setErrorHandler((error, _request, reply) => {
     // 404 rather than 400 so that a client writing to a room that was deleted
     // or purged gets the same signal as one reading it, and can stop instead of
-    // retrying a request that can never succeed.
+    // retrying a request that can never succeed. The body stays the shared one:
+    // error.message is never sent, because it would separate "gone" from
+    // "never existed".
     if (error instanceof RoomNotFoundError) {
       reply.code(404);
-      return reply.send({ error: "room_not_found", message: error.message });
+      return reply.send(NOT_FOUND);
+    }
+    if (error instanceof RoomCodeFormatError) {
+      // A code that is not even the right shape says nothing about which rooms
+      // exist, so this one may explain itself: a student needs to know they
+      // mistyped rather than being told the room is gone.
+      reply.code(400);
+      return reply.send({ error: "bad_room_code", message: error.message });
     }
     if (error instanceof RoomCodeError || error instanceof SnapshotError) {
       reply.code(400);
@@ -205,7 +325,7 @@ async function holdUntilChanged(
 /**
  * Export and delete are gated behind ADMIN_TOKEN. With no token configured the
  * routes do not exist at all, so a deployment cannot accidentally expose a
- * whole class's work to anyone who guessed a room code.
+ * whole class's work to anyone holding a room code.
  */
 function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): void {
   const token = config.adminToken;
@@ -228,11 +348,11 @@ function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): voi
 
   app.get("/api/admin/rooms/:code/export", async (request, reply) => {
     if (!authorize(request, reply)) return reply;
-    const roomCode = normalizeRoomCode((request.params as { code?: string }).code, config.roomCodeMaxLength);
+    const roomCode = normalizeRoomCode((request.params as { code?: string }).code);
     const data = await store.exportRoom(roomCode);
     if (data === null) {
       reply.code(404);
-      return { error: "room_not_found", room: roomCode };
+      return NOT_FOUND;
     }
     reply.header("cache-control", "no-store");
     return data;
@@ -240,7 +360,7 @@ function registerAdminRoutes(app: FastifyInstance, { config, store }: Deps): voi
 
   app.delete("/api/admin/rooms/:code", async (request, reply) => {
     if (!authorize(request, reply)) return reply;
-    const roomCode = normalizeRoomCode((request.params as { code?: string }).code, config.roomCodeMaxLength);
+    const roomCode = normalizeRoomCode((request.params as { code?: string }).code);
     const deleted = await store.deleteRoom(roomCode);
     reply.code(deleted ? 200 : 404);
     return { room: roomCode, deleted };

@@ -85,6 +85,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       TRUST_PROXY: ${TRUST_PROXY:-true}
+      ROOM_CODE_LENGTH: ${ROOM_CODE_LENGTH:-10}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE: ${RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE:-60}
+      RATE_LIMIT_ROOM_CREATES_PER_HOUR: ${RATE_LIMIT_ROOM_CREATES_PER_HOUR:-60}
+      RATE_LIMIT_REQUESTS_PER_MINUTE: ${RATE_LIMIT_REQUESTS_PER_MINUTE:-3000}
     ports:
       # Bound to loopback: the public entry point is nginx on the host, which
       # terminates TLS and strips the /fishbone prefix before proxying here.

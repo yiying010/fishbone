@@ -6,6 +6,8 @@
  * See docs/deployment.md for the documented list.
  */
 
+import { DEFAULT_CODE_LENGTH, MAX_CODE_LENGTH, MIN_CODE_LENGTH } from "./rooms/codes.ts";
+
 export interface AppConfig {
   host: string;
   port: number;
@@ -32,7 +34,24 @@ export interface AppConfig {
   longPollMs: number;
   maxSnapshotBytes: number;
   bodyLimitBytes: number;
-  roomCodeMaxLength: number;
+  /** Length of newly generated codes. Existing shorter codes still resolve. */
+  roomCodeLength: number;
+  /** How long a member's session token stays valid, refreshed on every request. */
+  sessionTtlHours: number;
+  rateLimitEnabled: boolean;
+  /**
+   * Failed room lookups per address per minute. This is the budget that stops
+   * code enumeration, so it is deliberately far tighter than the overall
+   * request limit; ordinary use spends it only on typos.
+   */
+  rateLimitLookupFailuresPerMinute: number;
+  rateLimitRoomCreatesPerHour: number;
+  /**
+   * Everything under /api per address per minute. A whole class shares one
+   * school NAT address, so this has to stay generous: it exists to bound a
+   * single source, not to shape normal traffic.
+   */
+  rateLimitRequestsPerMinute: number;
   maxArtifactBytes: number;
   trustProxy: boolean;
   /** When null the admin export/delete routes are not registered at all. */
@@ -116,7 +135,21 @@ export function loadConfig(publicDir: string): AppConfig {
     longPollMs: collect(() => optionalInteger("SYNC_LONG_POLL_MS", 20_000, 0, 120_000), 20_000),
     maxSnapshotBytes: collect(() => optionalInteger("MAX_SNAPSHOT_BYTES", 1_048_576, 1024, 33_554_432), 1_048_576),
     bodyLimitBytes: collect(() => optionalInteger("BODY_LIMIT_BYTES", 4_194_304, 4096, 67_108_864), 4_194_304),
-    roomCodeMaxLength: collect(() => optionalInteger("ROOM_CODE_MAX_LENGTH", 64, 4, 256), 64),
+    roomCodeLength: collect(
+      () => optionalInteger("ROOM_CODE_LENGTH", DEFAULT_CODE_LENGTH, MIN_CODE_LENGTH, MAX_CODE_LENGTH),
+      DEFAULT_CODE_LENGTH,
+    ),
+    sessionTtlHours: collect(() => optionalInteger("SESSION_TTL_HOURS", 24, 1, 8_760), 24),
+    rateLimitEnabled: collect(() => optionalBoolean("RATE_LIMIT_ENABLED", true), true),
+    rateLimitLookupFailuresPerMinute: collect(
+      () => optionalInteger("RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE", 60, 1, 100_000),
+      60,
+    ),
+    rateLimitRoomCreatesPerHour: collect(() => optionalInteger("RATE_LIMIT_ROOM_CREATES_PER_HOUR", 60, 1, 100_000), 60),
+    rateLimitRequestsPerMinute: collect(
+      () => optionalInteger("RATE_LIMIT_REQUESTS_PER_MINUTE", 3_000, 10, 10_000_000),
+      3_000,
+    ),
     maxArtifactBytes: collect(() => optionalInteger("MAX_ARTIFACT_BYTES", 4_194_304, 1024, 33_554_432), 4_194_304),
     trustProxy: collect(() => optionalBoolean("TRUST_PROXY", true), true),
     adminToken: raw("ADMIN_TOKEN") ?? null,

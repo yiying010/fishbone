@@ -1,23 +1,79 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeMemberId, normalizeRoomCode } from "../../build/rooms/store.js";
+import { normalizeMemberId } from "../../build/rooms/store.js";
+import {
+  DEFAULT_CODE_LENGTH,
+  MIN_CODE_LENGTH,
+  formatRoomCode,
+  generateRoomCode,
+  normalizeRoomCode,
+} from "../../build/rooms/codes.js";
+import { RateLimiter } from "../../build/rate-limit.js";
 import { assertSnapshot, clampRound, readItems, readSources, readVotes } from "../../build/domain/snapshot.js";
 
 const NUL = String.fromCharCode(0);
 
-test("room codes are normalized, not rejected, for the ways students type them", () => {
-  assert.equal(normalizeRoomCode("  FISH-042  ", 64), "FISH-042");
-  assert.equal(normalizeRoomCode("FISH   042", 64), "FISH 042");
-  assert.throws(() => normalizeRoomCode("   ", 64), /must not be empty/);
-  assert.throws(() => normalizeRoomCode("x".repeat(65), 64), /at most 64/);
-  assert.throws(() => normalizeRoomCode(`FISH${NUL}042`, 64), /control characters/);
-  assert.throws(() => normalizeRoomCode(42, 64), /must be a string/);
-  // These survive encodeURIComponent but not the proxy in front of the service,
-  // and would surface as an unexplained 404 rather than a usable message.
-  for (const bad of ["A/B", "A\\B", "A%B", "A?B", "A#B"]) {
-    assert.throws(() => normalizeRoomCode(bad, 64), /must not contain/, `${bad} should be rejected`);
-  }
+test("generated codes are drawn from an alphabet with nothing to misread", () => {
+  const code = generateRoomCode();
+  assert.equal(code.length, DEFAULT_CODE_LENGTH);
+  // Crockford Base32, lower case: no i, l, o or u.
+  assert.match(code, /^[0-9abcdefghjkmnpqrstvwxyz]+$/);
+  assert.doesNotMatch(code, /[ilou]/);
+
+  // Not a uniqueness proof, but a generator stuck on one value would show here.
+  const many = new Set(Array.from({ length: 500 }, () => generateRoomCode()));
+  assert.equal(many.size, 500);
+
+  assert.throws(() => generateRoomCode(MIN_CODE_LENGTH - 1), RangeError);
+});
+
+test("a code is accepted however a student types it", () => {
+  const code = "k7m2x9qpwd";
+  assert.equal(normalizeRoomCode(code), code);
+  assert.equal(normalizeRoomCode("K7M2X-9QPWD"), code);
+  assert.equal(normalizeRoomCode(" k7m2x - 9qpwd "), code);
+  assert.equal(formatRoomCode(code), "k7m2x-9qpwd");
+
+  // Crockford's aliases: the characters that are not in the alphabet are
+  // exactly the ones people misread, and they map back onto what they meant.
+  assert.equal(normalizeRoomCode("O123456789"), "0123456789");
+  assert.equal(normalizeRoomCode("Il23456789"), "1123456789");
+
+  // Anything that cannot be a code is refused before it reaches the database.
+  assert.throws(() => normalizeRoomCode("六年三班"), /unusable character/);
+  assert.throws(() => normalizeRoomCode("fish01"), /between 8 and 24/);
+  assert.throws(() => normalizeRoomCode(""), /between 8 and 24/);
+  assert.throws(() => normalizeRoomCode(`k7m2x${NUL}9qpwd`), /unusable character/);
+  assert.throws(() => normalizeRoomCode("a/b/c/d/e/f"), /unusable character/);
+  assert.throws(() => normalizeRoomCode(42), /must be a string/);
+});
+
+test("the rate limiter refills over time and keeps addresses apart", () => {
+  const limiter = new RateLimiter({ capacity: 3, refillPeriodMs: 60_000 });
+  const start = 1_000_000;
+
+  assert.deepEqual(
+    [0, 1, 2, 3].map((n) => limiter.take("a", start + n).allowed),
+    [true, true, true, false],
+  );
+  // A second address has its own budget: one school NAT must not be able to
+  // spend another site's allowance, and vice versa.
+  assert.equal(limiter.take("b", start).allowed, true);
+
+  // Empty means empty, and the 429 has to say when to come back.
+  const refused = limiter.take("a", start);
+  assert.equal(refused.allowed, false);
+  assert.ok(refused.retryAfterSeconds >= 1);
+
+  // One third of the period restores one token.
+  assert.equal(limiter.take("a", start + 20_000).allowed, true);
+  assert.equal(limiter.take("a", start + 20_000).allowed, false);
+
+  // peek reports without spending.
+  const before = limiter.peek("b", start).remaining;
+  limiter.peek("b", start);
+  assert.equal(limiter.peek("b", start).remaining, before);
 });
 
 test("member ids are required and bounded", () => {

@@ -112,4 +112,20 @@ export const migrations: Migration[] = [
       create index artifacts_room_idx on artifacts (room_id, exported_at desc);
     `,
   },
+  {
+    id: "0002_member_sessions",
+    sql: /* sql */ `
+      -- Joining a room hands back a bearer token. Reading or writing a room
+      -- needs that token, so an unauthenticated request cannot tell an existing
+      -- room from one that never existed, and a scan of the code space learns
+      -- nothing. The token is stored only as a digest.
+      alter table members
+        add column session_token_hash bytea,
+        add column session_expires_at timestamptz;
+
+      create unique index members_session_token_key
+        on members (session_token_hash)
+        where session_token_hash is not null;
+    `,
+  },
 ];

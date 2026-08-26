@@ -46,6 +46,20 @@ docker compose run --rm migrate
 
 若 nginx 的 `location` 寫成沒有結尾斜線的 `location /fishbone { proxy_pass http://app/; }`，nginx 會轉送出開頭為 `//` 的路徑。伺服器會把開頭重複的斜線收斂成一個再進行路由，因此這種寫法也能運作，只是仍建議採用範例中的寫法。
 
+## Deployment on RCSL's server
+
+This section describes only the deployment method used on RCSL's server, not any host-specific detail such as hostnames, filesystem paths, or credentials. Those live outside this repository, in the deployment host's own environment file and in a separate deployment repository not tracked here.
+
+On RCSL's server this project does not run behind its own public-facing nginx. It is one of several research projects deployed behind a single shared reverse-proxy layer that owns the public domain, terminates TLS, and dispatches each project to its own containers by URL subpath. That shared layer is owned by a separate deployment repository, not by this one, and this project's own `docker-compose.yml` has no awareness of it: the compose file keeps working standalone for local development exactly as documented above.
+
+The shared layer reaches this project's app container over an internal Docker network rather than through a published host port. A compose override file ("overlay") that lives in the deployment repository adds the app service to that network and gives it a stable container alias; it does not modify anything in this project's own compose file. Bringing the deployed app up therefore means running compose with two files together, this project's own `docker-compose.yml` plus the deployment repository's overlay for it, rather than the single-file command shown elsewhere in this document.
+
+A location block owned by the deployment repository strips this project's URL prefix before proxying to the app. This is exactly why the mounting-path contract above matters in practice: the app must stay mount-agnostic, because it never learns what prefix it is served under, or whether it is even the only project on the domain.
+
+Updating the deployed version is a pull-then-recompose on the deployment host: update this project's checkout there, then re-run compose with both files (this project's compose file and the deployment repository's overlay) so the app container is rebuilt and restarted while remaining attached to the shared network. The `db` and `migrate` services are unaffected by, and have no connection to, the shared layer.
+
+Environment configuration, the `.env` file, the database, the admin token, and any AI provider credentials, is entirely local to this project's own deployment on the host. None of it is shared with, or visible to, the shared reverse-proxy layer.
+
 ## 環境變數
 
 必填。缺少任何一項，程序會在啟動時列出所有問題並結束，不會以半套設定啟動。

@@ -2,7 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { projectSnapshot } from "../domain/projection.ts";
 import type { Snapshot } from "../domain/snapshot.ts";
 import { withTransaction, type Pool } from "../db/pool.ts";
+import { AdminRoomRepository } from "./admin-repository.ts";
+import { ArtifactRepository, type ArtifactInput } from "./artifact-repository.ts";
 import { generateRoomCode } from "./codes.ts";
+import { RoomNotFoundError } from "./errors.ts";
+import { RetentionRepository } from "./retention-repository.ts";
+
+export { RoomCodeError, RoomNotFoundError } from "./errors.ts";
+export { normalizeMemberId } from "./member-id.ts";
 
 export interface RoomState {
   revision: number;
@@ -23,24 +30,6 @@ export interface WriteConflict {
 }
 
 export type WriteResult = WriteAccepted | WriteConflict;
-
-export class RoomCodeError extends Error {}
-
-/**
- * The room code is well formed but no such room exists. Distinct from
- * RoomCodeError because the client has to react differently: a malformed code
- * is worth reporting to the student, a missing room means the room was deleted
- * or has passed its retention period and this client must stop syncing.
- */
-export class RoomNotFoundError extends Error {}
-
-export function normalizeMemberId(input: unknown): string {
-  if (typeof input !== "string") throw new RoomCodeError("memberId must be a string");
-  const id = input.trim();
-  if (id === "") throw new RoomCodeError("memberId must not be empty");
-  if (id.length > 128) throw new RoomCodeError("memberId must be at most 128 characters");
-  return id;
-}
 
 interface RoomRow {
   id: number;
@@ -72,9 +61,15 @@ export class RoomStore {
   // TypeScript support cannot erase those, and `npm run dev` / `npm run migrate`
   // execute these sources directly.
   private readonly pool: Pool;
+  private readonly artifacts: ArtifactRepository;
+  private readonly retention: RetentionRepository;
+  private readonly administration: AdminRoomRepository;
 
   constructor(pool: Pool) {
     this.pool = pool;
+    this.artifacts = new ArtifactRepository(pool);
+    this.retention = new RetentionRepository(pool);
+    this.administration = new AdminRoomRepository(pool);
   }
 
   /**
@@ -270,100 +265,24 @@ export class RoomStore {
 
   async saveArtifact(
     code: string,
-    input: { format: string; filename: string; content: string; exportedBy: string | null },
+    input: ArtifactInput,
   ): Promise<{ id: number; revision: number }> {
-    return withTransaction(this.pool, async (client) => {
-      const { rows } = await client.query<{ id: number; revision: number }>(
-        `update rooms set last_activity_at = now()
-          where lower(code) = lower($1)
-          returning id, revision`,
-        [code],
-      );
-      const room = rows[0];
-      if (room === undefined) throw new RoomNotFoundError("no such room");
-
-      const { rows: inserted } = await client.query<{ id: number }>(
-        `insert into artifacts (room_id, revision, format, filename, content, exported_by)
-         values ($1, $2, $3, $4, $5, $6)
-         returning id`,
-        [room.id, room.revision, input.format, input.filename, input.content, input.exportedBy],
-      );
-      const id = inserted[0]?.id;
-      if (id === undefined) throw new Error("artifact insert returned no row");
-      return { id, revision: room.revision };
-    });
+    return this.artifacts.save(code, input);
   }
 
-  /** How many rooms a sweep would delete, without deleting anything. */
   async countExpired(retentionDays: number): Promise<{ expiredRooms: number; totalRooms: number }> {
-    const { rows } = await this.pool.query<{ expired: string; total: string }>(
-      `select count(*) filter (where last_activity_at < now() - make_interval(days => $1::int)) as expired,
-              count(*) as total
-       from rooms`,
-      [retentionDays],
-    );
-    const row = rows[0];
-    return { expiredRooms: Number(row?.expired ?? 0), totalRooms: Number(row?.total ?? 0) };
+    return this.retention.countExpired(retentionDays);
   }
 
-  /**
-   * Hard delete. Rows go, cascades take the rest; nothing is tombstoned, so a
-   * purged room is genuinely gone from the live database.
-   *
-   * Returns the codes it removed. A room code is not student content, and
-   * without it a sweep leaves no way to answer "what did we just delete?" —
-   * which matters because there is no undo.
-   */
   async purgeExpired(retentionDays: number): Promise<{ deletedRooms: number; codes: string[] }> {
-    const { rows } = await this.pool.query<{ code: string }>(
-      `delete from rooms
-       where last_activity_at < now() - make_interval(days => $1::int)
-       returning code`,
-      [retentionDays],
-    );
-    return { deletedRooms: rows.length, codes: rows.map((row) => row.code) };
+    return this.retention.purgeExpired(retentionDays);
   }
 
-  /**
-   * The relational projection for one room, as a single JSON document. This is
-   * the shape a teacher or researcher wants: the snapshot alone is a merge
-   * artefact, not a readable record.
-   */
   async exportRoom(code: string): Promise<Record<string, unknown> | null> {
-    const { rows } = await this.pool.query<{ id: number } & Record<string, unknown>>(
-      `select id, code, revision, current_step, created_at, updated_at, last_activity_at, snapshot
-         from rooms where lower(code) = lower($1)`,
-      [code],
-    );
-    const room = rows[0];
-    if (room === undefined) return null;
-
-    const [members, submissions, groupings, voteRounds, votes, artifacts] = await Promise.all([
-      this.pool.query(`select * from members where room_id = $1 order by first_seen_at`, [room.id]),
-      this.pool.query(`select * from submissions where room_id = $1 order by kind, created_at`, [room.id]),
-      this.pool.query(`select * from groupings where room_id = $1 order by kind, created_at`, [room.id]),
-      this.pool.query(`select * from vote_rounds where room_id = $1 order by kind, round`, [room.id]),
-      this.pool.query(`select * from votes where room_id = $1 order by kind, round, member_id`, [room.id]),
-      this.pool.query(
-        `select id, revision, format, filename, exported_by, exported_at, length(content) as content_bytes, content
-           from artifacts where room_id = $1 order by exported_at`,
-        [room.id],
-      ),
-    ]);
-
-    return {
-      room,
-      members: members.rows,
-      submissions: submissions.rows,
-      groupings: groupings.rows,
-      voteRounds: voteRounds.rows,
-      votes: votes.rows,
-      artifacts: artifacts.rows,
-    };
+    return this.administration.exportRoom(code);
   }
 
   async deleteRoom(code: string): Promise<boolean> {
-    const { rowCount } = await this.pool.query(`delete from rooms where lower(code) = lower($1)`, [code]);
-    return (rowCount ?? 0) > 0;
+    return this.administration.deleteRoom(code);
   }
 }

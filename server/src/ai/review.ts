@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Snapshot } from "../domain/snapshot.ts";
+import { withoutNul, type Snapshot } from "../domain/snapshot.ts";
 import { RateLimiter } from "../rate-limit.ts";
 
 export const AI_TASKS = [
@@ -235,7 +235,7 @@ function validateReflection(value: unknown): AiResult {
 }
 
 function cleanText(value: unknown, max = 2_000): string {
-  return typeof value === "string" ? value.replaceAll("\u0000", "").trim().slice(0, max) : "";
+  return typeof value === "string" ? withoutNul(value).trim().slice(0, max) : "";
 }
 
 function records(value: unknown): Record<string, unknown>[] {
@@ -243,7 +243,10 @@ function records(value: unknown): Record<string, unknown>[] {
 }
 
 function owner(item: Record<string, unknown>): string {
-  return cleanText(item["createdBy"] ?? item["source"], 128);
+  // Matches the createdBy-or-source fallback in domain/snapshot.ts readItems():
+  // each side is coerced to a string first, then falls back on emptiness, so a
+  // non-string createdBy (or one that is explicitly "") still resolves to source.
+  return cleanText(item["createdBy"], 128) || cleanText(item["source"], 128);
 }
 
 function required(value: unknown, code: string): string {
@@ -292,6 +295,9 @@ export function extractAiInput(
       break;
     case "step8_cause": {
       if (itemId === "") throw new AiRequestError("ai_item_id_required", "itemId is required");
+      // No client path currently deletes a cause (unlike removeMethod, which
+      // populates deletedMethodIds below), so this branch is unreachable today.
+      // Kept symmetric with step14_method in case cause deletion is added later.
       if (Array.isArray(snapshot["deletedCauseIds"]) && snapshot["deletedCauseIds"].some((id) => cleanText(id, 200) === itemId)) {
         throw new AiRequestError("ai_item_not_found", "requested item was deleted");
       }
@@ -346,7 +352,10 @@ export function extractAiInput(
       const methods = records(snapshot["methods"]).filter((item) => cleanText(item["status"], 100) === "正式方法");
       const categoryById = new Map(records(snapshot["cats"]).map((cat) => [cleanText(cat["id"], 200), cleanText(cat["name"], 200)]));
       const methodById = new Map(methods.map((method) => [cleanText(method["id"], 200), cleanText(method["text"])]));
-      const selectedText = (value: unknown): string => methodById.get(cleanText(value, 200)) ?? cleanText(value);
+      // Falls back to "" rather than the raw method id: a stale reference (the
+      // method was edited back to draft, or removed) must not leak the
+      // internal id into AI-facing text or the student-visible summary.
+      const selectedText = (value: unknown): string => methodById.get(cleanText(value, 200)) ?? "";
       content = {
         confirmed_problem: required(snapshot["problem"], "confirmed_problem_missing"),
         cause_categories: causes.map((cause) => ({
@@ -470,6 +479,13 @@ interface AiReviewServiceOptions {
   cacheTtlMs?: number;
 }
 
+/**
+ * Per-member rate limit and response cache are held in process, same tradeoff
+ * as RateLimiter (../rate-limit.ts): with several replicas each holds its own
+ * budget and cache, so the effective AI request limit multiplies by the
+ * replica count and identical concurrent requests routed to different
+ * replicas no longer share one in-flight provider call. See docs/deployment.md.
+ */
 export class AiReviewService {
   private readonly client: OpenAiReviewClient;
   private readonly limiter: RateLimiter;

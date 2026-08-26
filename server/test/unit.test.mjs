@@ -197,6 +197,36 @@ test("AI inputs are selected from authoritative state and omit identity fields",
   ]);
 });
 
+test("card ownership falls back to source when createdBy is not a string", () => {
+  const snapshot = {
+    sources: [],
+    problem: "作業遲交",
+    // A tampered or legacy card can carry a non-string createdBy; ownership
+    // must still resolve through `source`, same as readItems() does.
+    causes: [{ id: "c1", text: "忘記期限", createdBy: 12345, source: "u1" }],
+  };
+  const step8 = extractAiInput("step8_cause", "c1", snapshot, "u1", 12_000);
+  assert.equal(step8.content.cause_card, "忘記期限");
+});
+
+test("step19 drops a stale feasible/unique method reference instead of leaking its id", () => {
+  const snapshot = {
+    sources: [],
+    problem: "作業遲交",
+    goal: "準時完成",
+    causes: [],
+    methods: [{ id: "m1", text: "設提醒", createdBy: "u1", status: "正式方法", causes: [], effect: "提早提醒" }],
+    // References a method that no longer exists in the confirmed-methods list.
+    feasible: "m-removed",
+    unique: "m-removed",
+    reflections: [{ id: "r1", text: "反思", createdBy: "u1" }],
+  };
+  const step19 = extractAiInput("step19_reflection", undefined, snapshot, "u1", 12_000);
+  assert.equal(step19.content.feasible_selection, "");
+  assert.equal(step19.content.original_selection, "");
+  assert.doesNotMatch(JSON.stringify(step19), /m-removed/);
+});
+
 test("OpenAI review uses strict structured output without storage or provider tools", async () => {
   let sent;
   const client = new OpenAiReviewClient({
@@ -274,6 +304,11 @@ async function aiRouteApp({ member = { memberId: "u1", roomId: 1 }, revision = 7
       const current = revisions[Math.min(readCount, revisions.length - 1)];
       readCount += 1;
       return { revision: current, currentStep: 14, snapshot };
+    },
+    async readRevision() {
+      const current = revisions[Math.min(readCount, revisions.length - 1)];
+      readCount += 1;
+      return current;
     },
   };
   const config = {

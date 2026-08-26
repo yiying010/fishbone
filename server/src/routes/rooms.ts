@@ -271,15 +271,16 @@ export function registerRoomRoutes(app: FastifyInstance, deps: Deps): void {
       // The provider call may finish after another member edits the room. Do
       // not hand a now-stale result to the browser as if it still matched the
       // authoritative snapshot; the caller can refresh and request it again.
-      const latest = await store.read(roomCode);
-      if (latest === null) return notFound(request, reply);
-      if (latest.revision !== baseRevision) {
+      // Only the revision number is needed here, not the full snapshot.
+      const latestRevision = await store.readRevision(roomCode);
+      if (latestRevision === null) return notFound(request, reply);
+      if (latestRevision !== baseRevision) {
         request.log.info(
           { task, correlationId: reviewed.inputHash.slice(0, 16), outcome: "stale_after_provider" },
           "AI review discarded",
         );
         reply.code(409);
-        return { error: "stale_room_revision", revision: latest.revision };
+        return { error: "stale_room_revision", revision: latestRevision };
       }
       request.log.info(
         {

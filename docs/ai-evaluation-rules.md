@@ -1,4 +1,4 @@
-﻿# AI Evaluation Rules Preserved from the Activity
+# AI Evaluation Rules Preserved from the Activity
 
 ## Purpose
 

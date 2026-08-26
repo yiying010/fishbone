@@ -1,4 +1,4 @@
-﻿import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { withoutNul, type Snapshot } from "../domain/snapshot.ts";
 import { RateLimiter } from "../rate-limit.ts";
 

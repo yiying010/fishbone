@@ -1,4 +1,4 @@
-﻿# AI-Assisted Step Requirements
+# AI-Assisted Step Requirements
 
 ## Status
 

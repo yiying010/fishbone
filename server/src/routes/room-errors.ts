@@ -8,6 +8,11 @@ import { ROOM_NOT_FOUND } from "./room-context.ts";
 /** Maps domain and transport failures to the room API's stable public contract. */
 export function registerRoomErrorHandler(app: FastifyInstance, config: AppConfig): void {
   app.setErrorHandler((error, _request, reply) => {
+    // 404 rather than 400 so that a client writing to a room that was deleted
+    // or purged gets the same signal as one reading it, and can stop instead of
+    // retrying a request that can never succeed. The body stays the shared one:
+    // error.message is never sent, because it would separate "gone" from
+    // "never existed".
     if (error instanceof RoomNotFoundError) {
       reply.code(404);
       return reply.send(ROOM_NOT_FOUND);

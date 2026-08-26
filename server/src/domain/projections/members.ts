@@ -16,6 +16,9 @@ export async function projectMembers(
        from unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[])
          as t(member_id, display_name, color, is_system, has_joined)
      on conflict (room_id, member_id) do update
+       -- Never blank a stored name: a client that merged a partial source
+       -- record can post an entry with no name, and that name is also what
+       -- groupings.title is built from.
        set display_name = case when excluded.display_name = '' then members.display_name
                                else excluded.display_name end,
            color        = excluded.color,

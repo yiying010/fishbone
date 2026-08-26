@@ -20,6 +20,8 @@ export async function projectGroupings(client: PoolClient, snapshot: Snapshot, r
   const groups = rows.map((row) => JSON.stringify(row.proposal.groups));
   const payloads = rows.map((row) => JSON.stringify(row.proposal.payload));
 
+  // The proposal's title is rendered client-side from the author's display
+  // name; store the same thing so exports do not need the client.
   await client.query(
     `insert into groupings (room_id, kind, proposal_id, author_member_id, title, is_official, payload)
      select $1, t.kind, t.proposal_id, t.author,

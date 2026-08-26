@@ -16,6 +16,8 @@ export async function projectVotes(client: PoolClient, snapshot: Snapshot, roomI
   for (const { kind, field, roundField, resolvedField } of VOTE_KINDS) {
     const votes = readVotes(snapshot, field, roundField);
     const currentRound = readRound(snapshot, roundField);
+    // `solutionTie` is the only tie flag the snapshot carries; every other
+    // tie is derived in the UI from the counts, which are reproducible here.
     const tie = kind === "solution" ? readBoolean(snapshot, "solutionTie") : false;
     const resolved = resolvedField === null ? "" : readString(snapshot, resolvedField);
 

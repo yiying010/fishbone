@@ -83,6 +83,10 @@ export function roomNotFound(request: FastifyRequest, reply: FastifyReply, limit
   return ROOM_NOT_FOUND;
 }
 
+/**
+ * Resolves the room code and the caller's session together, because every
+ * failure among them has to look the same from outside.
+ */
 export async function authenticateRoom(
   request: FastifyRequest,
   deps: RoomRouteDeps,

@@ -61,6 +61,16 @@ export interface AppConfig {
   /** When null the admin export/delete routes are not registered at all. */
   adminToken: string | null;
   publicDir: string;
+  /** External AI is opt-in so a deploy never starts sending student text by accident. */
+  aiEnabled: boolean;
+  /** Server-only credential. Null when AI is disabled. Never log this value. */
+  openAiApiKey: string | null;
+  /** Server-owned model selection; the browser is never allowed to override it. */
+  openAiModel: string;
+  aiTimeoutMs: number;
+  aiMaxInputChars: number;
+  aiMaxOutputTokens: number;
+  aiRequestsPerMemberPerMinute: number;
 }
 
 class ConfigError extends Error {}
@@ -158,6 +168,16 @@ export function loadConfig(publicDir: string): AppConfig {
     trustProxy: collect(() => optionalBoolean("TRUST_PROXY", true), true),
     adminToken: raw("ADMIN_TOKEN") ?? null,
     publicDir,
+    aiEnabled: collect(() => optionalBoolean("AI_ENABLED", false), false),
+    openAiApiKey: raw("OPENAI_API_KEY") ?? null,
+    openAiModel: raw("OPENAI_MODEL") ?? "gpt-4.1",
+    aiTimeoutMs: collect(() => optionalInteger("AI_TIMEOUT_MS", 30_000, 1_000, 55_000), 30_000),
+    aiMaxInputChars: collect(() => optionalInteger("AI_MAX_INPUT_CHARS", 12_000, 500, 100_000), 12_000),
+    aiMaxOutputTokens: collect(() => optionalInteger("AI_MAX_OUTPUT_TOKENS", 500, 100, 4_000), 500),
+    aiRequestsPerMemberPerMinute: collect(
+      () => optionalInteger("AI_REQUESTS_PER_MEMBER_PER_MINUTE", 10, 1, 1_000),
+      10,
+    ),
   };
 
   if (config.adminToken !== null && config.adminToken.length < 24) {
@@ -166,6 +186,14 @@ export function loadConfig(publicDir: string): AppConfig {
 
   if (config.bodyLimitBytes < config.maxSnapshotBytes) {
     problems.push("BODY_LIMIT_BYTES must be >= MAX_SNAPSHOT_BYTES, otherwise valid snapshots are rejected by the HTTP layer");
+  }
+
+  if (config.aiEnabled && config.openAiApiKey === null) {
+    problems.push("OPENAI_API_KEY is required when AI_ENABLED=true");
+  }
+
+  if (config.aiEnabled && !/^[A-Za-z0-9._:-]{2,200}$/.test(config.openAiModel)) {
+    problems.push("OPENAI_MODEL contains unsupported characters");
   }
 
   if (problems.length > 0) {

@@ -196,7 +196,11 @@ export class RoomStore {
     );
   }
 
-  /** Cheap revision probe used by the long-poll hold loop. */
+  /**
+   * Cheap revision probe: just the integer, not the full snapshot. Used by the
+   * long-poll hold loop and by the AI review route's post-provider-call
+   * staleness check.
+   */
   async readRevision(code: string): Promise<number | null> {
     const { rows } = await this.pool.query<{ revision: number }>(
       `select revision from rooms where lower(code) = lower($1)`,

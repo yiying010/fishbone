@@ -91,6 +91,15 @@ services:
       RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE: ${RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE:-60}
       RATE_LIMIT_ROOM_CREATES_PER_HOUR: ${RATE_LIMIT_ROOM_CREATES_PER_HOUR:-60}
       RATE_LIMIT_REQUESTS_PER_MINUTE: ${RATE_LIMIT_REQUESTS_PER_MINUTE:-3000}
+      # AI is opt-in. The credential is passed only to this app container; the
+      # database and one-shot migration container never receive it.
+      AI_ENABLED: ${AI_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-30000}
+      AI_MAX_INPUT_CHARS: ${AI_MAX_INPUT_CHARS:-12000}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-500}
+      AI_REQUESTS_PER_MEMBER_PER_MINUTE: ${AI_REQUESTS_PER_MEMBER_PER_MINUTE:-10}
     ports:
       # Bound to loopback: the public entry point is nginx on the host, which
       # terminates TLS and strips the /fishbone prefix before proxying here.

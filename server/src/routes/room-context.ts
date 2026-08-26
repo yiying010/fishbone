@@ -6,6 +6,7 @@ import { normalizeRoomCode } from "../rooms/codes.ts";
 import type { RoomNotifier } from "../rooms/notifier.ts";
 import { RoomCodeError } from "../rooms/errors.ts";
 import type { AuthenticatedMember, RoomStore } from "../rooms/store.ts";
+import type { AiReviewService } from "../ai/review.ts";
 
 export interface Limiters {
   /** Everything under /api, per client address. Generous; only bounds a single source. */
@@ -21,6 +22,8 @@ export interface RoomRouteDeps {
   store: RoomStore;
   notifier: RoomNotifier;
   limiters: Limiters;
+  /** Null when AI_ENABLED is false or no credential is configured; the route registers but always answers 503. */
+  aiService: AiReviewService | null;
 }
 
 export const ROOM_NOT_FOUND = Object.freeze({ error: "room_not_found" });

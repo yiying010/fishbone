@@ -79,6 +79,13 @@ docker compose run --rm migrate
 | `BODY_LIMIT_BYTES` | `4194304` | HTTP 請求主體上限，必須大於等於 `MAX_SNAPSHOT_BYTES`。 |
 | `MAX_ARTIFACT_BYTES` | `4194304` | 匯出成果的大小上限。 |
 | `PUBLIC_DIR` | 映像檔內的 `public/` | 靜態檔案目錄。 |
+| `AI_ENABLED` | `false` | 是否註冊可用的外部 AI 協助。保持 `false` 時不會送出任何學生文字。設為 `true` 前須另行核准部署與研究／隱私流程。 |
+| `OPENAI_API_KEY` | 無 | `AI_ENABLED=true` 時必填。只傳入 app 容器，不得提交到 Git、映像檔或前端。 |
+| `OPENAI_MODEL` | `gpt-4.1` | 伺服器控制的模型名稱；瀏覽器不能指定。正式研究前應以代表性案例評估並固定版本。 |
+| `AI_TIMEOUT_MS` | `30000` | 單次供應商請求逾時，最大 55 秒，須低於外層 proxy timeout。 |
+| `AI_MAX_INPUT_CHARS` | `12000` | 送往 AI 的最小化內容字元上限；超過時拒絕，不會傳完整快照。 |
+| `AI_MAX_OUTPUT_TOKENS` | `500` | 單次 AI 結果的輸出 token 上限。 |
+| `AI_REQUESTS_PER_MEMBER_PER_MINUTE` | `10` | 每個房間、每位已驗證成員的 AI 請求上限；另有重複請求抑制。 |
 
 `.env.example` 是這份表格的可執行版本，複製為 `.env` 後填入即可。
 
@@ -109,6 +116,8 @@ docker compose run --rm migrate
 建立房間不需要任何憑證，因此 `RATE_LIMIT_ROOM_CREATES_PER_HOUR` 是限制有人灌爆資料庫的那道防線。若未來需要更嚴格的控制，適合的做法是為建立端點加上教師憑證，而不是調低限額。
 
 限流狀態存在行程記憶體中。若擴充為多個複本，每個複本各持一份預算，實際限額會乘上複本數；單一容器的部署沒有這個問題。
+
+`AI_REQUESTS_PER_MEMBER_PER_MINUTE` 與 AI 重複請求抑制快取適用同樣的限制：狀態同樣只存在單一複本的行程記憶體中，多複本部署下實際的每人 AI 額度會乘上複本數。
 
 ## 記錄
 

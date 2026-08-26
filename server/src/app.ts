@@ -9,6 +9,7 @@ import { RoomNotifier } from "./rooms/notifier.ts";
 import { RoomStore } from "./rooms/store.ts";
 import { registerHealthRoutes } from "./routes/health.ts";
 import { registerRoomRoutes, type Limiters } from "./routes/rooms.ts";
+import { AiReviewService, OpenAiReviewClient } from "./ai/review.ts";
 
 export function defaultPublicDir(): string {
   // build/app.js -> repo root -> public
@@ -106,10 +107,21 @@ export async function buildApp(config: AppConfig, pool: Pool): Promise<FastifyIn
   const store = new RoomStore(pool);
   const notifier = new RoomNotifier();
   const limiters = createLimiters(config);
+  const aiService = config.aiEnabled && config.openAiApiKey !== null
+    ? new AiReviewService({
+        client: new OpenAiReviewClient({
+          apiKey: config.openAiApiKey,
+          model: config.openAiModel,
+          timeoutMs: config.aiTimeoutMs,
+          maxOutputTokens: config.aiMaxOutputTokens,
+        }),
+        requestsPerMemberPerMinute: config.aiRequestsPerMemberPerMinute,
+      })
+    : null;
   app.decorate("limiters", limiters);
 
   registerHealthRoutes(app, pool, Date.now());
-  registerRoomRoutes(app, { config, store, notifier, limiters });
+  registerRoomRoutes(app, { config, store, notifier, limiters, aiService });
 
   await app.register(fastifyStatic, {
     root: config.publicDir,

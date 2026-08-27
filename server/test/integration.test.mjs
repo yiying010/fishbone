@@ -837,6 +837,49 @@ if (!databaseUrl) {
     assert.deepEqual(hydrated.snapshot.deletedGoalIdeaIds, ["gi1"]);
   });
 
+  test("a member cannot tombstone another member's details or goal ideas", async () => {
+    const code = await newRoom();
+    const owner = await joinRoom(code, "u1", "小安");
+    const other = await joinRoom(code, "u2", "小美");
+    const created = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 11,
+        baseRevision: 0,
+        snapshot: snapshot({
+          problemDetails: [{ id: "pd1", text: "小安的補充", createdBy: "u1", contentVersion: 10 }],
+          problemDetailsVersion: 10,
+          goalIdeas: [{ id: "gi1", text: "小安的目標", createdBy: "u1", contentVersion: 10 }],
+          goalIdeasVersion: 10,
+        }),
+      },
+      auth(owner.token),
+    );
+    assert.equal(created.statusCode, 200, created.body);
+
+    const attempted = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 11,
+        baseRevision: json(created).revision,
+        snapshot: snapshot({
+          problemDetails: [],
+          problemDetailsVersion: 11,
+          deletedProblemDetailIds: ["pd1"],
+          goalIdeas: [],
+          goalIdeasVersion: 11,
+          deletedGoalIdeaIds: ["gi1"],
+        }),
+      },
+      auth(other.token),
+    );
+    assert.equal(attempted.statusCode, 200, attempted.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(owner.token)));
+    assert.deepEqual(hydrated.snapshot.problemDetails.map((item) => item.id), ["pd1"]);
+    assert.deepEqual(hydrated.snapshot.goalIdeas.map((item) => item.id), ["gi1"]);
+  });
+
   test("the exported artifact is stored against the room", async () => {
     const code = await newRoom();
     const session = await joinRoom(code, "u1", "小安", 19);

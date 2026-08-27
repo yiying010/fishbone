@@ -26,7 +26,7 @@ export async function projectSnapshot(
 ): Promise<void> {
   const { roomId } = context;
   await projectMembers(client, snapshot, context);
-  await projectSubmissions(client, snapshot, roomId);
+  await projectSubmissions(client, snapshot, roomId, context.memberId);
   await projectGroupings(client, snapshot, roomId);
   await projectVotes(client, snapshot, roomId);
 

@@ -2,7 +2,12 @@ import type { PoolClient } from "../../db/pool.ts";
 import { ITEM_KINDS, monotonicVersion, readItems, type Snapshot } from "../snapshot.ts";
 import { dedupe, KEY_SEPARATOR } from "./shared.ts";
 
-export async function projectSubmissions(client: PoolClient, snapshot: Snapshot, roomId: number): Promise<void> {
+export async function projectSubmissions(
+  client: PoolClient,
+  snapshot: Snapshot,
+  roomId: number,
+  memberId: string | null,
+): Promise<void> {
   const collected = ITEM_KINDS.flatMap(({ kind, field, step }) =>
     readItems(snapshot, field).map((item) => ({ kind, field, step, item })),
   );
@@ -89,23 +94,28 @@ export async function projectSubmissions(client: PoolClient, snapshot: Snapshot,
     goal_idea: "deletedGoalIdeaIds",
     method: "deletedMethodIds",
   };
-  for (const { kind, field, step } of ITEM_KINDS) {
+  for (const { kind, field } of ITEM_KINDS) {
     const deletedField = deletedFields[kind];
     if (deletedField === undefined) continue;
     const deleted = Array.isArray(snapshot[deletedField]) ? snapshot[deletedField] : [];
     const version = monotonicVersion(snapshot[`${field}Version`]);
     for (const itemId of deleted) {
       if (typeof itemId !== "string" || itemId === "") continue;
+      // Collection tombstones must target an existing card owned by the
+      // authenticated author. Do not create a tombstone for a missing id: that
+      // would let one member pre-empt another member's future card.
       await client.query(
-        `insert into submissions (room_id, kind, item_id, step, deleted_version, deleted_at)
-         values ($1, $2, $3, $4, $5, now())
-         on conflict (room_id, kind, item_id) do update
-           set deleted_version = excluded.deleted_version,
-               deleted_at      = excluded.deleted_at,
-               updated_at      = now()
-         where excluded.deleted_version > submissions.deleted_version
-           and excluded.deleted_version > submissions.content_version`,
-        [roomId, kind, itemId, step, version],
+        `update submissions
+            set deleted_version = $4,
+                deleted_at      = now(),
+                updated_at      = now()
+          where room_id = $1
+            and kind = $2
+            and item_id = $3
+            and $4 > deleted_version
+            and $4 > content_version
+            and (author_member_id = $5 or author_member_id in ('group', 'unknown'))`,
+        [roomId, kind, itemId, version, memberId],
       );
     }
   }

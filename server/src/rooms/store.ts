@@ -1,14 +1,14 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { projectSnapshot } from "../domain/projection.ts";
 import type { Snapshot } from "../domain/snapshot.ts";
 import { withTransaction, type Pool } from "../db/pool.ts";
 import { AdminRoomRepository } from "./admin-repository.ts";
 import { ArtifactRepository, type ArtifactInput } from "./artifact-repository.ts";
 import { generateRoomCode } from "./codes.ts";
-import { RoomNotFoundError } from "./errors.ts";
+import { MemberIdentityError, RoomNotFoundError } from "./errors.ts";
 import { RetentionRepository } from "./retention-repository.ts";
 
-export { RoomCodeError, RoomNotFoundError } from "./errors.ts";
+export { MemberIdentityError, RoomCodeError, RoomNotFoundError } from "./errors.ts";
 export { normalizeMemberId } from "./member-id.ts";
 
 export interface RoomState {
@@ -97,6 +97,10 @@ export class RoomStore {
    * Joins an existing room and issues this member a session token. Returns null
    * when there is no such room; the caller answers that indistinguishably from
    * a bad token.
+   *
+   * `previousToken` is the bearer token this browser already holds for the room,
+   * or "" for a first join. It is what lets a reload keep its member id; see the
+   * ownership check below.
    */
   async join(
     code: string,
@@ -104,6 +108,7 @@ export class RoomStore {
     displayName: string,
     step: number,
     sessionTtlHours: number,
+    previousToken: string,
   ): Promise<JoinResult | null> {
     return withTransaction(this.pool, async (client) => {
       const { rows } = await client.query<RoomRow>(
@@ -114,6 +119,24 @@ export class RoomStore {
       );
       const room = rows[0];
       if (room === undefined) return null;
+
+      // A member id is public collaboration metadata: it is carried in the
+      // shared snapshot, so it cannot double as a credential. Without this
+      // check any member could re-join under someone else's id, overwrite that
+      // person's session and then write as them.
+      //
+      // A row with no digest was created by snapshot projection rather than by
+      // a join, so no browser holds that identity yet and the first to ask may
+      // claim it. Once a token has been issued, only a browser that can present
+      // it may rotate the session.
+      const existing = await client.query<{ session_token_hash: Buffer | null }>(
+        `select session_token_hash from members where room_id = $1 and member_id = $2 for update`,
+        [room.id, memberId],
+      );
+      const ownerHash = existing.rows[0]?.session_token_hash ?? null;
+      if (ownerHash !== null && (previousToken === "" || !timingSafeEqual(ownerHash, hashToken(previousToken)))) {
+        throw new MemberIdentityError("member id is already owned by another session");
+      }
 
       const token = randomBytes(32).toString("base64url");
       await client.query(

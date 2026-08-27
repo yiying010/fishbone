@@ -165,7 +165,10 @@ export function loadConfig(publicDir: string): AppConfig {
       3_000,
     ),
     maxArtifactBytes: collect(() => optionalInteger("MAX_ARTIFACT_BYTES", 4_194_304, 1024, 33_554_432), 4_194_304),
-    trustProxy: collect(() => optionalBoolean("TRUST_PROXY", true), true),
+    // A direct deployment must not accept a caller-supplied X-Forwarded-For as
+    // its identity. Compose explicitly enables this only behind the supplied
+    // nginx configuration, which replaces rather than appends that header.
+    trustProxy: collect(() => optionalBoolean("TRUST_PROXY", false), false),
     adminToken: raw("ADMIN_TOKEN") ?? null,
     publicDir,
     aiEnabled: collect(() => optionalBoolean("AI_ENABLED", false), false),

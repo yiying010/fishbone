@@ -12,6 +12,7 @@ import {
 import { registerAdminRoomRoutes } from "./admin-rooms.ts";
 import {
   authenticateRoom,
+  bearerToken,
   displayName,
   gateRoomRequest,
   rateLimited,
@@ -59,6 +60,7 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
       displayName(payload["name"]),
       roomStep(payload["step"]),
       config.sessionTtlHours,
+      bearerToken(request),
     );
     if (joined === null) return roomNotFound(request, reply, limiters);
 

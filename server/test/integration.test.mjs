@@ -68,8 +68,8 @@ if (!databaseUrl) {
     return json(response).room;
   };
 
-  const joinRoom = async (code, memberId, name, step = 2) => {
-    const response = await post(`/api/rooms/${code}/join`, { memberId, name, step });
+  const joinRoom = async (code, memberId, name, step = 2, headers) => {
+    const response = await post(`/api/rooms/${code}/join`, { memberId, name, step }, headers);
     assert.equal(response.statusCode, 200, response.body);
     return json(response);
   };
@@ -135,12 +135,12 @@ if (!databaseUrl) {
 
   test("an unauthenticated caller cannot tell an existing room from one that never existed", async () => {
     const real = await newRoom();
-    await joinRoom(real, "u1", "小安");
+    const writer = await joinRoom(real, "u1", "小安");
     await post(`/api/rooms/${real}/state`, {
       step: 2,
       baseRevision: 0,
       snapshot: snapshot({ distresses: [{ id: "d1", text: "私密的困擾", createdBy: "u1" }] }),
-    }, auth((await joinRoom(real, "u1", "小安")).token));
+    }, auth(writer.token));
 
     // The room now holds real content. Every way of asking about it without a
     // session must be indistinguishable from asking about a room that is not
@@ -182,6 +182,55 @@ if (!databaseUrl) {
     const crossed = await get(`/api/rooms/${theirs}/state`, auth(session.token));
     assert.equal(crossed.statusCode, 404);
     assert.deepEqual(json(crossed), { error: "room_not_found" });
+  });
+
+  test("a public member id cannot be used to take over another session", async () => {
+    const code = await newRoom();
+    const owner = await joinRoom(code, "u1", "小安");
+    const attacker = await joinRoom(code, "u2", "阿凱");
+
+    const takeover = await post(
+      `/api/rooms/${code}/join`,
+      { memberId: "u1", name: "冒用者", step: 2 },
+      auth(attacker.token),
+    );
+    assert.equal(takeover.statusCode, 409);
+    assert.equal(json(takeover).error, "member_id_in_use");
+    // The original bearer remains valid after the rejected attempt.
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(owner.token))).statusCode, 200);
+
+    // Rejoining with the existing bearer is a safe session rotation.
+    const rotated = await joinRoom(code, "u1", "小安", 2, auth(owner.token));
+    assert.notEqual(rotated.token, owner.token);
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(rotated.token))).statusCode, 200);
+  });
+
+  test("a member listed in a snapshot but never joined can still claim that id", async () => {
+    const code = await newRoom();
+    const writer = await joinRoom(code, "u1", "小安");
+    // Projection creates a row for every source in the snapshot, with no session
+    // digest. That row must not lock the person it names out of their own id.
+    await post(`/api/rooms/${code}/state`, {
+      step: 2,
+      baseRevision: 0,
+      snapshot: snapshot({
+        sources: [
+          { id: "u1", name: "小安", color: "#276EF1", system: false, joined: true },
+          { id: "u9", name: "小悠", color: "#46515f", system: false, joined: false },
+        ],
+      }),
+    }, auth(writer.token));
+    const rows = await pool.query(
+      "select session_token_hash from members m join rooms r on r.id = m.room_id where lower(r.code) = $1 and m.member_id = 'u9'",
+      [code.toLowerCase()],
+    );
+    assert.equal(rows.rows[0].session_token_hash, null, "the projected row must have no session yet");
+
+    const claimed = await joinRoom(code, "u9", "小悠");
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(claimed.token))).statusCode, 200);
+    // Having been claimed, it is now protected like any other member id.
+    const second = await post(`/api/rooms/${code}/join`, { memberId: "u9", name: "冒用者", step: 2 });
+    assert.equal(second.statusCode, 409);
   });
 
   test("a code is accepted however it is typed", async () => {
@@ -595,7 +644,7 @@ if (!databaseUrl) {
 
     // This is how the client tells "session expired" from "room deleted"
     // without the server ever having to say which.
-    const again = await joinRoom(code, "u1", "小安");
+    const again = await joinRoom(code, "u1", "小安", 2, auth(session.token));
     assert.notEqual(again.token, session.token);
     assert.equal((await get(`/api/rooms/${code}/state`, auth(again.token))).statusCode, 200);
   });

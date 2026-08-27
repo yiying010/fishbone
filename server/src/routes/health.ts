@@ -18,11 +18,14 @@ export function registerHealthRoutes(app: FastifyInstance, pool: Pool, startedAt
         client.release();
       }
     } catch (error) {
+      // The probe is public so a load balancer can use it. Keep connection and
+      // schema diagnostics in server logs, not in a response visible to every
+      // caller.
+      app.log.warn({ err: error }, "health check database query failed");
       reply.code(503);
       return {
         status: "unhealthy",
         database: "unreachable",
-        error: (error as Error).message,
         uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
       };
     }

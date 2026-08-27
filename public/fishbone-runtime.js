@@ -35,7 +35,7 @@
         SYNC.session=0;SYNC.token="";
         // render() clears the gate message, so it has to come first.
         render();
-        showGate(outcome==="not-found"?"找不到這個房間碼，請再確認一次。房間碼由老師建立後提供。":outcome==="rate-limited"?"嘗試次數過多，請稍候一分鐘再試。":"目前連不上小組伺服器，請確認網路後再試一次。");
+        showGate(outcome==="not-found"?"找不到這個房間碼，請再確認一次。房間碼由老師建立後提供。":outcome==="rate-limited"?"嘗試次數過多，請稍候一分鐘再試。":outcome==="taken"?"這個身分已經在別的裝置或分頁使用中。請關閉那一邊，或改用另一個瀏覽器分頁重新加入。":"目前連不上小組伺服器，請確認網路後再試一次。");
         /* The attempt stopped the poll loop that was running for the room this
            device was already in. Without this the student keeps working and
            keeps seeing "connected", but never receives another teammate's

@@ -110,6 +110,52 @@ test("a payload that is not a room snapshot is refused", () => {
   assert.throws(() => assertSnapshot({ sources: [], pad: "x".repeat(2000) }, 1000), /limit is 1000/);
 });
 
+test("snapshot identifiers and colors cannot become executable DOM attributes", () => {
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1\" onclick=alert(1)", name: "x" }] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1", color: "red\" onmouseenter=alert(1)" }] }, 100_000),
+    /#RRGGBB/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], groupingVotes: { "u1\" onclick=alert(1)": "p1" } }, 100_000),
+    /letters, digits, _ or -/,
+  );
+});
+
+test("a field name that carries both an id list and an object list is checked as each", () => {
+  // `causes` is cause cards at the top level and cause ids on a method card.
+  const accepted = assertSnapshot({
+    sources: [{ id: "u1", name: "小安" }],
+    causes: [{ id: "c1", text: "沒有記錄習慣", createdBy: "u1" }],
+    methods: [{ id: "m1", text: "設提醒", causes: ["c1"] }],
+  }, 100_000);
+  assert.equal(accepted.causes[0].id, "c1");
+  assert.throws(
+    () => assertSnapshot({
+      sources: [{ id: "u1" }],
+      methods: [{ id: "m1", causes: ["c1' onclick=alert(1)"] }],
+    }, 100_000),
+    /letters, digits, _ or -/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], causes: [{ id: "c1\" onclick=alert(1)" }] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+});
+
+test("excessive snapshot nesting is refused before serialization can exhaust the stack", () => {
+  const snapshot = { sources: [] };
+  let cursor = snapshot;
+  for (let depth = 0; depth < 65; depth += 1) {
+    cursor.nested = {};
+    cursor = cursor.nested;
+  }
+  assert.throws(() => assertSnapshot(snapshot, 100_000), /nested too deeply/);
+});
+
 test("U+0000 is stripped so a pasted NUL cannot wedge a room on a jsonb error", () => {
   const cleaned = assertSnapshot(
     { sources: [{ id: "u1", name: `小安${NUL}` }], distresses: [{ id: "d1", text: `a${NUL}b` }] },

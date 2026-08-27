@@ -19,8 +19,12 @@
     const CODE_ALPHABET="0123456789abcdefghjkmnpqrstvwxyz";
     function canonRoomCode(value){let out="";for(let ch of String(value||"").toLowerCase()){if(ch==="o")ch="0";else if(ch==="i"||ch==="l")ch="1";if(CODE_ALPHABET.includes(ch))out+=ch}return out}
     function showRoomCode(value){let code=String(value||""),groups=[];for(let at=0;at<code.length;at+=5)groups.push(code.slice(at,at+5));return groups.join("-")}
-    /* The member id is public room metadata. The opaque bearer token proves
-       ownership of that member id after a reload and stays in this tab only. */
+    /* The member id travels in the shared snapshot, so it names a collaborator
+       but proves nothing. The session token is what proves ownership of that id,
+       and it is kept in sessionStorage next to the tab-scoped member id itself:
+       a reload can then re-join as the same person, while a second tab gets a
+       new id rather than a claim on this one. It never enters the snapshot or
+       the localStorage cache, both of which are shared with the whole group. */
     function roomTokenKey(code){return "fishboneRoomToken:"+canonRoomCode(code)}
     function loadRoomToken(code){try{return sessionStorage.getItem(roomTokenKey(code))||""}catch(e){return ""}}
     function saveRoomToken(code,token){try{if(token)sessionStorage.setItem(roomTokenKey(code),token)}catch(e){}}
@@ -125,6 +129,8 @@
        while already in a room mean different things to them. */
     async function connectRoom(initial,beforeApply){
       if(location.protocol==="file:"){SYNC.offline=true;SYNC.session=0;setSyncStatus(false,"目前以 file:// 開啟，只有這台裝置看得到內容。請改用伺服器網址進行小組活動。");render();return "error"}
+      /* Carry the stored token into the join request: it is the only way the
+         server can tell this reload from someone else claiming the id. */
       SYNC.offline=false;let session=++SYNC.session;SYNC.revision=0;SYNC.serverJson="";SYNC.token=loadRoomToken(S.roomCode);
       setSyncStatus(false,"正在連線到小組伺服器…");
       try{
@@ -134,7 +140,7 @@
            missing room and a mistyped one without saying which. */
         if(res.status===404||res.status===400){SYNC.session=0;setSyncStatus(false,"找不到這個房間碼。");return "not-found"}
         if(res.status===429){SYNC.session=0;setSyncStatus(false,"嘗試次數過多，請稍候再試。");return "rate-limited"}
-        if(res.status===409){let error=await res.json().catch(()=>({}));SYNC.session=0;return error.error==="room_full_or_locked"?"room-full":"member-id-in-use"}
+        if(res.status===409){let error=await res.json().catch(()=>({}));SYNC.session=0;if(error.error==="room_full_or_locked"){setSyncStatus(false,"這個小組目前不接受新成員。");return "room-full"}setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();
         if(SYNC.session!==session)return "error";

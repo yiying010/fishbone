@@ -126,13 +126,34 @@ test("a room that no longer exists stops the session instead of re-creating it",
 });
 
 test("reading or writing a room always carries the session token", () => {
-  // Joining is the only room request that legitimately has no token.
+  // Joining is the only room request that may have no token, and only on a
+  // first join; see the ownership test below.
   const roomFetches = html.match(/fetch\(roomApi\("(state|artifacts)"\)[^;]*?\)/g) ?? [];
   assert.ok(roomFetches.length >= 4, `expected several state/artifact requests, found ${roomFetches.length}`);
   for (const call of roomFetches) {
     assert.match(call, /headers:syncHeaders\(/, `a room request without the token header: ${call.slice(0, 80)}`);
   }
   assert.match(html, /h\["authorization"\]="Bearer "\+SYNC\.token/);
+});
+
+test("rejoining an existing member proves ownership with a tab-scoped bearer", () => {
+  assert.match(html, /function roomTokenKey\(code\)/);
+  assert.match(html, /sessionStorage\.getItem\(roomTokenKey\(code\)\)/);
+  assert.match(html, /SYNC\.token=loadRoomToken\(S\.roomCode\)/);
+  const joins = html.match(/fetch\(roomApi\("join"\),\{method:"POST"[^;]*?\}\)/g) ?? [];
+  assert.ok(joins.length >= 2, "expected join and recovery requests");
+  for (const join of joins) assert.match(join, /headers:syncHeaders\(true\)/);
+  assert.match(html, /saveRoomToken\(S\.roomCode,SYNC\.token\)/);
+  // The token is per tab and per room, and never reaches the shared caches.
+  assert.match(html, /roomTokenKey\(code\)\{return "fishboneRoomToken:"\+canonRoomCode\(code\)/);
+  assert.doesNotMatch(html, /localStorage\.setItem\([^)]*SYNC\.token/);
+});
+
+test("a member id already held by another session is reported as such, not as a bad code", () => {
+  assert.match(html, /res\.status===409.*return "taken"/);
+  const join = html.match(/async function joinActivity\(\)\{[\s\S]*?\n {4}\}/);
+  assert.ok(join, "joinActivity not found");
+  assert.match(join[0], /outcome==="taken"/);
 });
 
 test("the student is only in the room once the server has accepted the code", () => {
@@ -234,7 +255,7 @@ test("Step 5 and Step 11 drafts use all active ideas without domain templates", 
 test("Step 14 keeps the authoritative three-level method review", () => {
   assert.match(html, /function methodCauseAssessment\(/);
   assert.match(html, /level:"suggest"/);
-  assert.match(html, /m\.status="建議補充"/);
+  assert.match(html, /level==="suggest"[^\n]*"建議補充"/);
   assert.match(html, /沒有事先整理截止日期/);
 });
 
@@ -337,6 +358,33 @@ test("an immediate poll response is paced, so SYNC_LONG_POLL_MS=0 cannot spin", 
 
 test("sync requests are built from that base and the room code is escaped", () => {
   assert.match(html, /function roomApi\(suffix\)\{return SYNC\.base\+"api\/rooms\/"\+encodeURIComponent/);
+});
+
+test("method AI reviews publish current work then use the authenticated same-origin API", () => {
+  assert.match(html, /async function publishForAi\(session\)/);
+  assert.match(html, /fetch\(roomApi\("state"\),\{method:"POST"/);
+  assert.match(html, /async function requestAiReview\(task,itemId\)/);
+  assert.match(html, /fetch\(roomApi\("ai\/review"\),\{method:"POST"/);
+  assert.match(html, /headers:syncHeaders\(true\)/);
+  assert.match(html, /JSON\.stringify\(\{task,itemId,baseRevision:revision\}\)/);
+  assert.match(html, /requestAiReview\("step14_method",id\)/);
+  // A disabled or unavailable provider may fall back to local rules, but the
+  // result must say so instead of being represented as an AI response.
+  assert.match(html, /本機規則檢查：/);
+  assert.match(html, /AI 建議：/);
+  // A stale AI response is discarded rather than applied to changed content.
+  assert.match(html, /response\.status==="stale"/);
+  assert.match(html, /小組內容已更新/);
+});
+
+test("editing a method explanation persists it and invalidates downstream classification", () => {
+  const softEdit = html.match(/function methodEditSoft\(id,k,v\)\{[^\n]*/);
+  assert.ok(softEdit, "methodEditSoft not found");
+  assert.match(softEdit[0], /resetMethodClass\(\)/);
+  assert.match(softEdit[0], /saveRoom\(\)/);
+  // This remains a command handler rather than a render loop, so typing does
+  // not steal focus from the textarea on every keypress.
+  assert.doesNotMatch(softEdit[0], /render\(\)/);
 });
 
 test("no build artefact re-introduces a second copy of the activity", async () => {

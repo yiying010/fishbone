@@ -147,6 +147,10 @@ export class RoomStore {
    * Joins an existing room and issues this member a session token. Returns null
    * when there is no such room; the caller answers that indistinguishably from
    * a bad token.
+   *
+   * `previousToken` is the bearer token this browser already holds for the room,
+   * or "" for a first join. It is what lets a reload keep its member id; see the
+   * ownership check below.
    */
   async join(
     code: string,
@@ -166,6 +170,9 @@ export class RoomStore {
       const room = rows[0];
       if (room === undefined) return null;
 
+      // The member id is public collaboration metadata. A projected row with
+      // no digest is still unclaimed; once a token has been issued, only a tab
+      // presenting that token may rotate the session.
       const existing = await client.query<{ session_token_hash: Buffer | null }>(
         `select session_token_hash
            from members
@@ -173,16 +180,14 @@ export class RoomStore {
           for update`,
         [room.id, memberId],
       );
-      const existingHash = existing.rows[0]?.session_token_hash;
+      const existingRow = existing.rows[0];
+      const ownerHash = existingRow?.session_token_hash ?? null;
       let newMemberOrdinal = 0;
-      if (existingHash !== undefined) {
-        const candidate = hashToken(previousToken);
-        if (previousToken === "" || existingHash === null || !timingSafeEqual(existingHash, candidate)) {
-          throw new MemberIdentityError("member id is already owned by another session");
-        }
+      if (ownerHash !== null && (previousToken === "" || !timingSafeEqual(ownerHash, hashToken(previousToken)))) {
+        throw new MemberIdentityError("member id is already owned by another session");
       }
 
-      if (existingHash === undefined) {
+      if (existingRow === undefined) {
         if (room.members_locked) throw new RoomCapacityError("room membership is locked");
         if (room.expected_member_count !== null) {
           const count = await client.query<{ count: string }>(

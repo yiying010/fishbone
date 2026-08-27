@@ -43,6 +43,14 @@ export function registerRoomErrorHandler(app: FastifyInstance, config: AppConfig
       reply.code(409);
       return reply.send({ error: "room_full_or_locked" });
     }
+    // Fastify's JSON parser and content-type handling report a client mistake
+    // through statusCode. Keep that 4xx outcome, but without the parser's own
+    // message and without turning malformed input into an error-log flood.
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    if (typeof statusCode === "number" && statusCode >= 400 && statusCode < 500) {
+      reply.code(statusCode);
+      return reply.send({ error: "bad_request" });
+    }
     app.log.error({ err: error }, "request failed");
     reply.code(500);
     return reply.send({ error: "internal_error" });

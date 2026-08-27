@@ -179,6 +179,14 @@ function nullableText(value: unknown, field: string): string | null {
   return nonEmptyString(value, field);
 }
 
+/** Narrows an enum field to the literal that matched, never the raw value. */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], field: string): T {
+  if (typeof value !== "string" || !(allowed as readonly string[]).includes(value)) {
+    throw new AiProviderError("invalid_output", `invalid ${field}`);
+  }
+  return value as T;
+}
+
 function validateDraft(field: "draft" | "goal_draft"): (value: unknown) => AiResult {
   return (value) => {
     if (!isRecord(value)) throw new AiProviderError("invalid_output", "result must be an object");
@@ -201,10 +209,11 @@ function validateDraft(field: "draft" | "goal_draft"): (value: unknown) => AiRes
 
 function validateCause(value: unknown): AiResult {
   if (!isRecord(value)) throw new AiProviderError("invalid_output", "result must be an object");
-  const classification = value["classification"];
-  if (!["cause", "method", "result", "needs_clarification"].includes(String(classification))) {
-    throw new AiProviderError("invalid_output", "invalid cause classification");
-  }
+  // Compared as the raw value, not String(value): String(["cause"]) is "cause",
+  // so coercing first admits an array here and then returns it unchanged to a
+  // browser that was promised a string. These validators exist precisely
+  // because the provider's strict schema cannot be assumed to have held.
+  const classification = oneOf(value["classification"], ["cause", "method", "result", "needs_clarification"], "cause classification");
   const reason = nonEmptyString(value["reason"], "reason");
   const question = value["clarification_question"] === null ? null : nullableText(value["clarification_question"], "clarification_question");
   if ((classification === "needs_clarification") !== (question !== null)) {
@@ -215,10 +224,7 @@ function validateCause(value: unknown): AiResult {
 
 function validateMethod(value: unknown): AiResult {
   if (!isRecord(value)) throw new AiProviderError("invalid_output", "result must be an object");
-  const verdict = value["verdict"];
-  if (!["pass", "suggest", "revise"].includes(String(verdict))) {
-    throw new AiProviderError("invalid_output", "invalid method verdict");
-  }
+  const verdict = oneOf(value["verdict"], ["pass", "suggest", "revise"], "method verdict");
   const reason = nonEmptyString(value["reason"], "reason");
   const suggestion = value["revision_suggestion"] === null ? null : nullableText(value["revision_suggestion"], "revision_suggestion");
   return { verdict, reason, revision_suggestion: suggestion };
@@ -255,11 +261,46 @@ function required(value: unknown, code: string): string {
   return result;
 }
 
+/*
+ * Mirrors canEditCard() in public/fishbone-activity-rules.js rather than the
+ * stricter isOwnCard(): a card whose owner is "group" or "unknown" belongs to
+ * nobody in particular and every member may work on it.
+ *
+ * The difference is not theoretical. actor() answers "group" whenever the
+ * student has not joined a room yet, so anything written while working alone
+ * before joining is stored with createdBy "group". Enforcing strict equality
+ * here would offer the student every action on that card and then refuse the
+ * AI review of it with a 403 they cannot resolve.
+ */
+const SHARED_OWNERS = new Set(["", "group", "unknown"]);
+
 function findOwnedItem(snapshot: Snapshot, field: string, itemId: string, memberId: string): Record<string, unknown> {
   const item = records(snapshot[field]).find((candidate) => cleanText(candidate["id"], 200) === itemId);
   if (item === undefined) throw new AiRequestError("ai_item_not_found", "requested item was not found");
-  if (owner(item) !== memberId) throw new AiRequestError("ai_item_forbidden", "requested item is not owned by this member");
+  const cardOwner = owner(item);
+  if (cardOwner !== memberId && !SHARED_OWNERS.has(cardOwner)) {
+    throw new AiRequestError("ai_item_forbidden", "requested item is not owned by this member");
+  }
   return item;
+}
+
+/*
+ * The step 19 input is the whole activity at once: it grows with the size of
+ * the class and with how much everyone wrote, and there is nothing a student
+ * can edit to make it smaller. Refusing it outright hands them a 400 and no
+ * available action, so shorten the free text until it fits, and say in the
+ * payload that it was shortened, so the model summarises a record it knows is
+ * trimmed rather than one it believes is complete. Only the smallest cap
+ * failing is a genuine refusal.
+ */
+const AGGREGATE_TEXT_CAPS = [2_000, 800, 400, 200];
+
+function fitAggregate(build: (cap: number) => Record<string, unknown>, maxChars: number): Record<string, unknown> {
+  for (const [index, cap] of AGGREGATE_TEXT_CAPS.entries()) {
+    const content = index === 0 ? build(cap) : { ...build(cap), texts_shortened: true };
+    if (JSON.stringify(content).length <= maxChars) return content;
+  }
+  throw new AiRequestError("ai_input_too_large", "minimized AI input exceeds the configured limit");
 }
 
 function ensureInputSize(input: AiReviewInput, maxChars: number): AiReviewInput {
@@ -295,9 +336,8 @@ export function extractAiInput(
       break;
     case "step8_cause": {
       if (itemId === "") throw new AiRequestError("ai_item_id_required", "itemId is required");
-      // No client path currently deletes a cause (unlike removeMethod, which
-      // populates deletedMethodIds below), so this branch is unreachable today.
-      // Kept symmetric with step14_method in case cause deletion is added later.
+      // removeCause() in public/fishbone-cards.js adds the id here, and a stale
+      // client can still ask about a card another member has since deleted.
       if (Array.isArray(snapshot["deletedCauseIds"]) && snapshot["deletedCauseIds"].some((id) => cleanText(id, 200) === itemId)) {
         throw new AiRequestError("ai_item_not_found", "requested item was deleted");
       }
@@ -356,23 +396,23 @@ export function extractAiInput(
       // method was edited back to draft, or removed) must not leak the
       // internal id into AI-facing text or the student-visible summary.
       const selectedText = (value: unknown): string => methodById.get(cleanText(value, 200)) ?? "";
-      content = {
+      content = fitAggregate((cap) => ({
         confirmed_problem: required(snapshot["problem"], "confirmed_problem_missing"),
         cause_categories: causes.map((cause) => ({
           category: categoryById.get(cleanText(cause["catId"], 200)) ?? "",
-          cause: cleanText(cause["text"]),
+          cause: cleanText(cause["text"], cap),
         })),
         confirmed_goal: required(snapshot["goal"], "confirmed_goal_missing"),
-        methods: methods.map((method) => ({ category: cleanText(method["big"], 200), method: cleanText(method["text"]), effect: cleanText(method["effect"]) })),
+        methods: methods.map((method) => ({ category: cleanText(method["big"], 200), method: cleanText(method["text"], cap), effect: cleanText(method["effect"], cap) })),
         feasible_selection: selectedText(snapshot["feasible"]),
-        feasible_reason: cleanText(snapshot["feasibleReason"]),
+        feasible_reason: cleanText(snapshot["feasibleReason"], cap),
         original_selection: selectedText(snapshot["unique"]),
-        original_reason: cleanText(snapshot["uniqueReason"]),
+        original_reason: cleanText(snapshot["uniqueReason"], cap),
         reflections: records(snapshot["reflections"]).map((item, index) => ({
           label: `Reflection ${index + 1}`,
-          text: cleanText(item["text"]),
+          text: cleanText(item["text"], cap),
         })).filter((item) => item.text !== ""),
-      };
+      }), maxChars);
       if ((content["reflections"] as unknown[]).length === 0) {
         throw new AiRequestError("reflections_missing", "at least one reflection is required");
       }
@@ -444,6 +484,23 @@ export class OpenAiReviewClient {
     }
     if (!isRecord(payload)) throw new AiProviderError("invalid_output", "provider response must be an object");
 
+    /*
+     * The Responses API answers 200 with status "incomplete" when the run hit
+     * max_output_tokens, and still includes the partial text. Parsing that
+     * would fail on truncated JSON and reach the student as "the AI returned
+     * invalid output", which points the operator at the wrong thing entirely.
+     *
+     * Classified as invalid_output rather than temporary on purpose: a budget
+     * that is too small produces the same result on every retry, so telling
+     * the caller to try again later would be a lie. The reason lands in the
+     * route's log line, which is where an operator can act on it.
+     */
+    if (payload["status"] === "incomplete" || payload["status"] === "failed") {
+      const details = isRecord(payload["incomplete_details"]) ? payload["incomplete_details"] : {};
+      const reason = cleanText(details["reason"], 100) || cleanText(payload["status"], 100);
+      throw new AiProviderError("invalid_output", `provider_incomplete_${reason}`);
+    }
+
     const outputText = records(payload["output"])
       .flatMap((item) => records(item["content"]))
       .filter((item) => item["type"] === "output_text")
@@ -505,15 +562,23 @@ export class AiReviewService {
       .update(JSON.stringify({ task: input.task, promptVersion: definition.promptVersion, content: input.content }), "utf8")
       .digest("hex");
     const cacheKey = `${roomId}:${inputHash}`;
+
+    /*
+     * The budget is spent before the cache and in-flight lookups, not after.
+     * The cache key is room-wide and carries no member component, so serving a
+     * hit for free let any member replay a teammate's request without limit -
+     * AI_REQUESTS_PER_MEMBER_PER_MINUTE did not bound requests at all, only
+     * provider calls. Both are worth bounding; only one of them was.
+     */
+    const limit = this.limiter.take(`${roomId}:${memberId}`);
+    if (!limit.allowed) throw new AiRateLimitError(limit.retryAfterSeconds);
+
     const cached = this.cache.get(cacheKey);
     if (cached !== undefined && cached.expiresAt > Date.now()) return cached.response;
     if (cached !== undefined) this.cache.delete(cacheKey);
 
     const existing = this.inFlight.get(cacheKey);
     if (existing !== undefined) return existing;
-
-    const limit = this.limiter.take(`${roomId}:${memberId}`);
-    if (!limit.allowed) throw new AiRateLimitError(limit.retryAfterSeconds);
 
     const pending = this.client.generate(input).then(({ value, metadata }) => {
       const response = { inputHash, promptVersion: definition.promptVersion, result: value, metadata };

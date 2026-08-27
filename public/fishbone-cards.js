@@ -19,12 +19,44 @@
     function takeStash(mid){let m=S.stash.find(x=>x.id===mid);if(!m)return;S.methods.push({id:uid("m"),text:m.text,source:m.source,createdBy:m.createdBy||m.source,updatedBy:actor(),big:"",status:"草稿",causes:[],effect:""});S.methodsVersion=(S.methodsVersion||0)+1;S.stash=S.stash.filter(x=>x.id!==mid);render()}
     function methodIdeaCard(m){let hint=vagueMethod(m)?'<p class="warn">這個方法還有點籠統，可以再補充誰做、什麼時候做、怎麼做。</p>':'<p class="small">這是一個候選方法，下一步再檢查它回應哪個原因。</p>';return `<article class="card methodCard"><textarea id="methodText-${m.id}" onchange="methodEdit('${m.id}','text',this.value)">${esc(m.text)}</textarea>${audit(m)}${hint}<button class="secondary" onclick="startVoice('methodText-${m.id}')">語音輸入</button><button class="secondary" onclick="removeMethod('${m.id}')">刪除</button></article>`}
     function methodEdit(id,k,v){let m=S.methods.find(x=>x.id===id);if(!m||!canEditCard(m)){showGate("只能修改自己提出的方法。");return}m[k]=v;if(["text","effect"].includes(k)&&["已完成檢查","已完成對應檢查","建議補充","需要修改說明"].includes(m.status)){m.status="草稿";m.checkMsg=""}setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();render()}
-    function methodEditSoft(id,k,v){let m=S.methods.find(x=>x.id===id);if(m&&canEditCard(m)){m[k]=v;if(["text","effect"].includes(k)&&["已完成檢查","已完成對應檢查","建議補充","需要修改說明"].includes(m.status)){m.status="草稿";m.checkMsg=""}setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1}}
+    /* "Soft" only means it does not re-render, because that would take the
+       caret out of the textarea mid-sentence. It is still a state change: it has
+       to reach the group through the normal debounce, and it has to invalidate
+       the classification that was built on the older wording. */
+    function methodEditSoft(id,k,v){let m=S.methods.find(x=>x.id===id);if(m&&canEditCard(m)&&m[k]!==v){m[k]=v;if(["text","effect"].includes(k)&&["已完成檢查","已完成對應檢查","建議補充","需要修改說明"].includes(m.status)){m.status="草稿";m.checkMsg=""}setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();saveRoom()}}
     function toggleMethodCause(mid,cid,on){let m=S.methods.find(x=>x.id===mid);if(!m||!canEditCard(m)){showGate("只能處理自己提出的方法。");return}m.causes=Array.isArray(m.causes)?m.causes:[];m.causes=on?unionIds(m.causes,[cid]):m.causes.filter(x=>x!==cid);if(["已完成檢查","已完成對應檢查","建議補充","需要修改說明"].includes(m.status)){m.status="草稿";m.checkMsg=""}setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();render()}
     function addCauseLink(mid,cid){if(!cid)return;toggleMethodCause(mid,cid,true)}
     function removeCauseLink(mid,cid){toggleMethodCause(mid,cid,false)}
-    function runMethodAiCheck(id){let m=S.methods.find(x=>x.id===id);if(!m||!canEditCard(m))return;let check=reviewMethodAlignment(m),level=check.level||(check.ok?"pass":"revise");if(level==="suggest"){m.status="建議補充";m.checkMsg=check.msg;setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();render();showGate(check.msg);return}if(level!=="pass"){m.status="需要修改說明";m.checkMsg=check.msg;setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();render();showGate(check.msg);return}m.status="已完成對應檢查";m.checkMsg=check.msg;setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();maybeAdvanceAfterMethodCheck();render();showOk(check.msg)}
-    function completeMethodCheck(id){let m=S.methods.find(x=>x.id===id);if(!m||!canEditCard(m)){showGate("只能提交自己提出的方法給 AI 檢查。");return}m.text=String(($("methodText-"+id)||{}).value||m.text||"").trim();m.effect=String(($("effect-"+id)||{}).value||m.effect||"").trim();m.status="AI檢查中";m.checkMsg="";setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;render();setTimeout(()=>runMethodAiCheck(id),180)}
+    /* The deterministic rule check is the fallback, not the product: it is
+       labelled as itself so that a room with no AI configured never presents a
+       keyword heuristic to a student as an AI judgement. */
+    function applyLocalMethodCheck(m){let check=reviewMethodAlignment(m),level=check.level||(check.ok?"pass":"revise");m.status=level==="pass"?"已完成對應檢查":level==="suggest"?"建議補充":"需要修改說明";m.checkMsg="本機規則檢查："+check.msg;return level==="pass"}
+    /* Shared tail of every verdict: a decided card invalidates the method
+       classification that was built on its previous wording, and only a pass may
+       carry the group forward. */
+    function settleMethodCheck(m,passed){setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();if(passed)maybeAdvanceAfterMethodCheck();render();if(passed)showOk(m.checkMsg);else showGate(m.checkMsg)}
+    /* The card is looked up again after the await: a teammate's snapshot may
+       have landed while the request was out, replacing this object, and the
+       student may already have moved the card on themselves. */
+    async function runMethodAiCheck(id,session){
+      let response=await requestAiReview("step14_method",id);
+      let m=S.methods.find(x=>x.id===id);
+      if(!m||!canEditCard(m)||SYNC.session!==session||m.status!=="AI檢查中")return;
+      if(response.status==="ok"){
+        let result=response.result||{},level=result.verdict||"revise",passed=level==="pass",suggestion=result.revision_suggestion?" "+String(result.revision_suggestion):"";
+        m.status=passed?"已完成對應檢查":level==="suggest"?"建議補充":"需要修改說明";
+        m.checkMsg="AI 建議："+String(result.reason||"")+(passed?"":suggestion);
+        settleMethodCheck(m,passed);
+        return;
+      }
+      if(response.status==="stale"){
+        m.status="草稿";m.checkMsg="小組內容已更新，請確認最新內容後再送交 AI 檢查。";
+        setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;resetMethodClass();render();showGate(m.checkMsg);
+        return;
+      }
+      settleMethodCheck(m,applyLocalMethodCheck(m));
+    }
+    function completeMethodCheck(id){let m=S.methods.find(x=>x.id===id);if(!m||!canEditCard(m)){showGate("只能提交自己提出的方法給 AI 檢查。");return}m.text=String(($("methodText-"+id)||{}).value||m.text||"").trim();m.effect=String(($("effect-"+id)||{}).value||m.effect||"").trim();m.status="AI檢查中";m.checkMsg="";setUpdated(m);S.methodsVersion=(S.methodsVersion||0)+1;let session=SYNC.session;render();void runMethodAiCheck(id,session)}
     function methodReasonChips(m,editable){let causes=usableCauses();if(!causes.length)return '<p class="small">尚未有已確認原因，請先回到原因分析完成向右魚骨圖。</p>';if(!editable){let names=(m.causes||[]).map(cid=>(S.causes.find(c=>c.id===cid)||{}).text).filter(Boolean);return names.length?`<div class="links">${names.map(n=>`<span>${esc(n)}</span>`).join("")}</div>`:'<p class="small">尚未連結原因。</p>'}return `<div class="chips">${causes.map(c=>`<label class="chip"><input type="checkbox" ${(m.causes||[]).includes(c.id)?"checked":""} onchange="toggleMethodCause('${m.id}','${c.id}',this.checked)">${esc(c.text)}</label>`).join("")}</div>`}
     function methodCheckCard(m){let editable=canEditCard(m),status=methodStatus(m),done=methodProcessed(m),hint=methodHint(m),needsAttention=["建議補充","需要修改說明"].includes(m.status),statusCls=done?"ok":(m.status==="AI檢查中"?"small":(needsAttention?"warn":"small")),checking=m.status==="AI檢查中";return `<article class="card methodCard ${done?'formal':''}">${editable?`<label>方法內容</label><textarea id="methodText-${m.id}" onchange="methodEdit('${m.id}','text',this.value)">${esc(m.text)}</textarea><button class="secondary" onclick="startVoice('methodText-${m.id}')">語音輸入</button>`:`<p>${esc(m.text)}</p>`}${audit(m)}<p class="${statusCls}"><strong>目前檢查狀態：</strong>${esc(status)}</p><p class="${needsAttention?'warn':'small'}">${esc(hint)}</p><label>對應原因</label>${methodReasonChips(m,editable)}<label>這個方法如何幫助達成決策目標？</label>${editable?`<textarea id="effect-${m.id}" oninput="methodEditSoft('${m.id}','effect',this.value)">${esc(m.effect||"")}</textarea><button class="secondary" onclick="startVoice('effect-${m.id}')">語音輸入</button><div class="row wrap"><button ${checking?"disabled":""} onclick="completeMethodCheck('${m.id}')">${checking?"AI老師檢查中":"送交 AI老師檢查"}</button><button class="secondary" onclick="skipMethod('${m.id}')">暫不處理／暫不保留</button></div>`:`<p class="surface">${esc(m.effect||"尚未填寫")}</p><div class="readOnlyNote">這是其他成員提出的方法，這裡先以唯讀顯示。</div>`}</article>`}
     function methodLinkEditor(){return `<div class="cardGrid">${S.methods.filter(m=>m.status!=="正式方法"&&m.status!=="暫不納入").map(m=>{let editable=canEditCard(m);return `<article class="card methodCard" draggable="${editable?'true':'false'}" ondragstart="${editable?`drag(event,'method','${m.id}')`:''}"><p>${esc(m.text)}</p>${audit(m)}${editable?'<p class="small">請把這張方法卡拖曳到右側的對應原因區。</p>':'<div class="readOnlyNote">這是其他成員提出的方法，先以唯讀呈現。</div>'}<div class="links">${m.causes.map(cid=>`<span>${esc((S.causes.find(c=>c.id===cid)||{}).text||"原因")} ${editable?`<button class="secondary" onclick="removeCauseLink('${m.id}','${cid}')">移除</button>`:""}</span>`).join("")||'<p class="small">尚未連結原因。</p>'}</div><label>這個方法如何幫助達成決策目標？</label>${editable?`<textarea id="effect-${m.id}" oninput="methodEditSoft('${m.id}','effect',this.value)">${esc(m.effect)}</textarea><button class="secondary" onclick="startVoice('effect-${m.id}')">語音輸入</button>`:`<p class="surface">${esc(m.effect||"尚未填寫")}</p>${lockedTools("method",m.id)}`}</article>`}).join("")}</div><p class="voiceStatus" id="voiceStatus">${voiceHelp(false)}</p>`}

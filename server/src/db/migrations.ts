@@ -129,7 +129,16 @@ export const migrations: Migration[] = [
     `,
   },
   {
-    id: "0003_room_membership_policy",
+    id: "0003_release_member_sessions",
+    sql: /* sql */ `
+      -- A member id may no longer be re-joined without presenting the token
+      -- that already holds it. Sessions issued before that rule were not kept
+      -- across reloads, so release them once during this upgrade.
+      update members set session_token_hash = null, session_expires_at = null;
+    `,
+  },
+  {
+    id: "0004_room_membership_policy",
     sql: /* sql */ `
       alter table rooms
         add column expected_member_count smallint,
@@ -141,7 +150,7 @@ export const migrations: Migration[] = [
     `,
   },
   {
-    id: "0004_authoritative_item_versions",
+    id: "0005_authoritative_item_versions",
     sql: /* sql */ `
       -- Snapshot absence is not deletion. These versions let PostgreSQL keep
       -- the newest explicit content or tombstone from each collaborating client.

@@ -26,6 +26,14 @@ Compose 定義三個服務：`db`（PostgreSQL 17）、`migrate`（一次性，�
 docker compose run --rm migrate
 ```
 
+### 升級到成員身分保護版本時的一次性影響
+
+`0003_release_member_sessions` 會清掉所有既有的成員 session。這是必要的：新版的加入流程要求「已發過 token 的 member id 必須出示原 token 才能換發 session」，而這個版本之前發出的 token，瀏覽器並沒有存在重新整理後找得回來的地方。若保留那些 digest，每位既有學生一重新整理就會拿到 409 而被鎖在自己的身分外面，既有卡片也會因為 `canEditCard` 比對不上而變成唯讀。
+
+實際影響是每個尚在進行中的 session 需要重新加入一次，這由前端自動完成，學生不需要操作。在各個 id 被重新認領之前，它們的可被冒用程度與升級前相同，因此這是一段會自行關閉的視窗，而不是新開的破口。
+
+建議在沒有課堂進行中的時段部署。
+
 ## 掛載路徑：唯一需要特別注意的約定
 
 應用在容器內固定服務於 `/`，而且**不知道也不需要知道**自己的公開路徑。前方 nginx 負責去掉 `/fishbone` 前綴。
@@ -80,7 +88,7 @@ Environment configuration, the `.env` file, the database, the admin token, and a
 | `RETENTION_SWEEP_INTERVAL_MINUTES` | `60` | 清除逾期房間的排程間隔。啟動時會先執行一次。 |
 | `SYNC_LONG_POLL_MS` | `20000` | 同步請求最長掛住的時間。設為 `0` 表示不掛住，客戶端改為單純重複輪詢。 |
 | `ADMIN_TOKEN` | 無 | 設定後才會註冊匯出與刪除房間的管理端點，最少 24 個字元。未設定時這些路由完全不存在。 |
-| `TRUST_PROXY` | `true` | 從 `X-Forwarded-For` 取得客戶端位址。限流以此位址為鍵，設錯會把所有連線者算成同一個。 |
+| `TRUST_PROXY` | `false` | 是否從 `X-Forwarded-For` 取得客戶端位址。只有 app 僅能經過會**覆寫**此標頭的受信任 proxy 存取時才設為 `true`；隨附的 Compose + nginx 範例符合此前提。限流以此位址為鍵。 |
 | `ROOM_CODE_LENGTH` | `10` | 新建房間碼的長度（Crockford Base32 字元），10 個字元為 50 位元。只影響新建的房間；已發出、長度在 8 到 24 之間的代碼仍可使用。 |
 | `SESSION_TTL_HOURS` | `24` | 成員 session 權杖的有效期，每次請求都會延長。 |
 | `RATE_LIMIT_ENABLED` | `true` | 關閉後所有限流都不生效。 |

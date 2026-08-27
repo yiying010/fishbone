@@ -42,7 +42,9 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
     const creates = limiters.roomCreates?.take(request.ip);
     if (creates && !creates.allowed) return rateLimited(reply, creates.retryAfterSeconds);
 
-    const payload = requestBody(request);
+    // Room creation historically accepts an empty POST. Keep that compatible
+    // with cached clients and probes that do not send JSON at all.
+    const payload = request.body === undefined ? {} : requestBody(request);
     const created = await store.createRoom(
       config.roomCodeLength,
       expectedMemberCount(payload["expectedMemberCount"]),

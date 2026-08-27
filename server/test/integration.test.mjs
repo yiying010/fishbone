@@ -86,6 +86,12 @@ if (!databaseUrl) {
     assert.ok(typeof body.databaseLatencyMs === "number");
   });
 
+  test("room creation accepts a POST without a request body", async () => {
+    const response = await post("/api/rooms");
+    assert.equal(response.statusCode, 201, response.body);
+    assert.match(json(response).room, /^[0-9abcdefghjkmnpqrstvwxyz]+$/);
+  });
+
   test("healthz turns non-200 when the schema it depends on is gone", async () => {
     await pool.query("alter table schema_migrations rename to schema_migrations_hidden");
     try {

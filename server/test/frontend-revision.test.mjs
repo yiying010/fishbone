@@ -273,6 +273,18 @@ test("server progress at Step 16 cannot push an active Revision back to Step 16"
   assert.equal(receiver.S.revisionChainIndex, 4, "official Revision progress still synchronizes");
   assert.equal(receiver.S.step, 8, "a local history view is not pulled away by the remote transition");
   assert.equal(receiver.S.reviewingStep, 8);
+
+  const staleEarlierCheckpoint = structuredClone(later);
+  staleEarlierCheckpoint.revisionChainIndex = 3;
+  staleEarlierCheckpoint.revisionTransitionVersion += 100;
+  receiver.applyRemote(staleEarlierCheckpoint, 16);
+  assert.equal(
+    receiver.S.revisionChainIndex,
+    4,
+    "a newer transition timestamp cannot rewind the official checkpoint within the same Revision round",
+  );
+  assert.equal(receiver.S.step, 8, "a stale checkpoint cannot pull a local history view away");
+  assert.equal(receiver.S.reviewingStep, 8);
 });
 
 test("two members restore their own Step 15 baselines during a later Revision cycle", () => {

@@ -711,6 +711,38 @@ if (!databaseUrl) {
     assert.equal(hydrated.snapshot.groupingVersion, 9000);
     assert.equal(hydrated.snapshot.authoritativeVoteVersions.grouping, 9000);
     assert.equal(hydrated.snapshot.authoritativeVoteVersions.groupConfirm, 7);
+
+    const roomId = (await pool.query("select id from rooms where lower(code) = $1", [code])).rows[0].id;
+    await pool.query(
+      "update rooms set snapshot = jsonb_set(snapshot, '{groupingVersion}', $2::jsonb) where id = $1",
+      [roomId, JSON.stringify(1e99)],
+    );
+    const staleRaw = json(await get(`/api/rooms/${code}/state`, auth(session.token)));
+    assert.equal(staleRaw.snapshot.groupingVersion, 9000);
+  });
+
+  test("authoritative hydrate keeps a newer group confirmation version", async () => {
+    const code = await newRoom();
+    const session = await joinRoom(code, "u1", "小安");
+    const written = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 3,
+        baseRevision: 0,
+        snapshot: snapshot({
+          groupingRound: 1,
+          groupingVersion: 7,
+          groupConfirmVotes: { u1: { value: "confirmed", contentVersion: 9000 } },
+        }),
+      },
+      auth(session.token),
+    );
+    assert.equal(written.statusCode, 200, written.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(session.token)));
+    assert.equal(hydrated.snapshot.groupingVersion, 9000);
+    assert.equal(hydrated.snapshot.authoritativeVoteVersions.grouping, 7);
+    assert.equal(hydrated.snapshot.authoritativeVoteVersions.groupConfirm, 9000);
   });
 
   test("a deleted card becomes an explicit tombstone", async () => {

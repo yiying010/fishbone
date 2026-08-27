@@ -178,6 +178,7 @@ export async function buildAuthoritativeSnapshot(
 
   const voteTombstones: Record<string, unknown>[] = [];
   const authoritativeVoteVersions: Record<string, number> = {};
+  const versionBySnapshotField: Record<string, number> = {};
   for (const { kind, field, roundField, resolvedField } of VOTE_KINDS) {
     const kindRounds = voteRounds.rows.filter((row) => row.kind === kind);
     const highestRound = maximum(kindRounds.map((row) => row.round));
@@ -215,10 +216,14 @@ export async function buildAuthoritativeSnapshot(
     ]);
     const versionField = VOTE_VERSION_FIELDS[kind];
     // grouping and groupConfirm deliberately share groupingVersion. Preserve
-    // the highest authoritative value instead of letting the later kind
-    // overwrite a newer vote with its own lower version.
+    // the highest *projected* value instead of letting the later kind overwrite
+    // a newer vote with its own lower version, or trusting stale JSONB values.
     if (versionField !== undefined) {
-      snapshot[versionField] = maximum([Number(snapshot[versionField]), authoritativeVoteVersions[kind]]);
+      versionBySnapshotField[versionField] = maximum([
+        versionBySnapshotField[versionField] ?? 0,
+        authoritativeVoteVersions[kind],
+      ]);
+      snapshot[versionField] = versionBySnapshotField[versionField];
     }
   }
 

@@ -68,7 +68,7 @@
              a later revision, and rewinding would strand serverJson on an older
              snapshot. */
           if((data.revision||0)>SYNC.revision){SYNC.revision=data.revision||0;SYNC.serverJson=json}
-          applyRoomPolicy(data);let acceptedStep=Number(data.currentStep);if(Number.isFinite(acceptedStep)&&!S.reviewingStep)S.step=Math.max(S.step,Math.min(19,Math.trunc(acceptedStep)));
+          applyRoomPolicy(data);applyAuthoritativeProgress(data.currentStep);
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           return true;

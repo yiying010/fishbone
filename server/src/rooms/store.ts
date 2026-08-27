@@ -90,6 +90,7 @@ const DURABLE_REVISION_FIELDS = [
   "revisionTransitionVersion",
   "revisionCheckpointGenerations",
   "revisionCheckpointConfirmations",
+  "methodClassOwnerBaselines",
 ] as const;
 
 /** Older clients may omit revision-chain fields; omission must not erase them. */

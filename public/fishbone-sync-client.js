@@ -100,12 +100,13 @@
       },0);
     },true);
     document.addEventListener("pointercancel",()=>{pendingDraftButtonActivation=null},true);
+    function applyAuthoritativeProgress(currentStep){let step=Number(currentStep);if(!Number.isFinite(step)||step<0||S.reviewingStep)return;if(S.revisionMode&&typeof revisionOfficialStep==="function"){S.step=Number(revisionOfficialStep())||S.step;return}S.step=Math.max(S.step,Math.min(19,Math.trunc(step)))}
     function applyRemote(data,currentStep){
       if(!data)return;syncMuted=true;
       try{
         let draft=captureRemoteDraft();if(draft)remoteDraftSnapshot=draft;
         mergeRoom(data);
-        let step=Number(currentStep);if(Number.isFinite(step)&&step>=0&&!S.reviewingStep)S.step=Math.max(S.step,Math.min(19,Math.trunc(step)));
+        applyAuthoritativeProgress(currentStep);
         autoAdvanceFromShared();
         if(imeComposing||activeDraftControl()){remotePaintPending=true;return}
         render();remotePaintPending=false;remoteDraftSnapshot=null;

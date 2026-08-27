@@ -237,7 +237,7 @@ export function readVotes(snapshot: Snapshot, field: string, roundField: string 
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const SAFE_COLOR = /^#[0-9A-Fa-f]{6}$/;
-const ID_FIELDS = new Set(["id", "source", "createdBy", "updatedBy", "memberId", "catId", "groupId", "from"]);
+const ID_FIELDS = new Set(["id", "source", "createdBy", "updatedBy", "memberId", "owner", "catId", "groupId", "from"]);
 const ID_ARRAY_FIELDS = new Set([
   "ids",
   "priority",
@@ -261,6 +261,7 @@ const ID_MAP_FIELDS = new Set([
   "outcomeVotes",
   "outcomeRevisionVotes",
   "solutionVotes",
+  "methodClassOwnerBaselines",
 ]);
 
 function assertSafeId(value: unknown, field: string): void {

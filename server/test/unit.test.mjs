@@ -126,6 +126,31 @@ test("snapshot identifiers and colors cannot become executable DOM attributes", 
   );
 });
 
+test("per-member method classification baselines are accepted and their owner ids are validated", () => {
+  const accepted = assertSnapshot({
+    sources: [{ id: "u1", name: "小安" }],
+    methodClassOwnerBaselines: {
+      u1: {
+        owner: "u1",
+        generation: 2,
+        version: 3,
+        groups: [{ name: "時間管理", ids: ["m1"] }],
+        skipped: [],
+      },
+    },
+  }, 100_000);
+  assert.equal(accepted.methodClassOwnerBaselines.u1.owner, "u1");
+  assert.throws(
+    () => assertSnapshot({
+      sources: [{ id: "u1" }],
+      methodClassOwnerBaselines: {
+        "u1\" onclick=alert(1)": { owner: "u1", groups: [] },
+      },
+    }, 100_000),
+    /letters, digits, _ or -/,
+  );
+});
+
 test("a field name that carries both an id list and an object list is checked as each", () => {
   // `causes` is cause cards at the top level and cause ids on a method card.
   const accepted = assertSnapshot({

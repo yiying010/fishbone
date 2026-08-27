@@ -117,7 +117,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 npm test
 ```
 
-會先執行 `npm run build`，因為測試是針對編譯後的輸出。不需要資料庫也能執行，此時整合測試會跳過並說明原因。要完整執行，請提供一個**可拋棄**的資料庫，測試會先刪除並重建其 `public` schema：
+會先執行 `npm run build`，因為測試是針對編譯後的輸出。不需要資料庫也能執行，此時整合測試與前端行為測試會跳過並說明原因。要完整執行，請提供一個**可拋棄**的資料庫，測試會先刪除並重建其 `public` schema：
 
 ```bash
 docker run -d --name fishbone-test-db -p 127.0.0.1:5433:5432 \
@@ -126,6 +126,8 @@ docker run -d --name fishbone-test-db -p 127.0.0.1:5433:5432 \
 
 TEST_DATABASE_URL=postgres://test:test@127.0.0.1:5433/fishbone_test npm test
 ```
+
+`server/test/frontend.test.mjs` 斷言的是前端資產的原始碼文字，只能證明某段程式存在。`server/test/frontend-behavior.test.mjs` 則把實際出貨的那些 script 載進來，接上真的伺服器執行，因此加入房間、身分擁有權與 Step 14 的 AI 檢查是被實際跑過而非從原始碼推論的。它需要資料庫，並在網路邊界替換 provider，所以連 `OpenAiReviewClient` 送出的請求與它要解析的回應形狀也在測試範圍內。
 
 ## 部署
 

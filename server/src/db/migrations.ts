@@ -128,4 +128,24 @@ export const migrations: Migration[] = [
         where session_token_hash is not null;
     `,
   },
+  {
+    id: "0003_release_member_sessions",
+    sql: /* sql */ `
+      -- A member id may no longer be re-joined without presenting the token
+      -- that already holds it. Every session issued before that rule existed
+      -- was handed to a browser that did not keep it anywhere a reload could
+      -- find, so leaving these digests in place would lock each of those
+      -- students out of their own identity the first time they refresh, and
+      -- their existing cards would go read-only under canEditCard().
+      --
+      -- Clearing the digest returns each row to the "never claimed" state the
+      -- join path treats as claimable, so the next join takes the id back. It
+      -- costs every live session one re-join, which the client does on its own.
+      --
+      -- Until each id is claimed again it is as takeable as it was before this
+      -- release, so this leaves a window rather than opening a hole: rooms
+      -- already carried that exposure, and each one closes on first join.
+      update members set session_token_hash = null, session_expires_at = null;
+    `,
+  },
 ];

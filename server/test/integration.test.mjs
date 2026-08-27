@@ -205,6 +205,33 @@ if (!databaseUrl) {
     assert.equal((await get(`/api/rooms/${code}/state`, auth(rotated.token))).statusCode, 200);
   });
 
+  test("the release migration frees every session issued before ownership was enforced", async () => {
+    // Replays the upgrade rather than trusting the SQL by reading it: a session
+    // that predates the ownership rule was handed to a browser with nowhere to
+    // keep it, so leaving its digest in place locks that student out on their
+    // first refresh.
+    const code = await newRoom();
+    const session = await joinRoom(code, "u1", "小安");
+    const stored = await pool.query(
+      "select m.session_token_hash from members m join rooms r on r.id = m.room_id where lower(r.code) = $1 and m.member_id = 'u1'",
+      [code.toLowerCase()],
+    );
+    assert.notEqual(stored.rows[0].session_token_hash, null, "the join must have issued a session");
+
+    await pool.query("delete from schema_migrations where id = $1", ["0003_release_member_sessions"]);
+    await runMigrations(pool, { info: () => {} });
+
+    const freed = await pool.query(
+      "select m.session_token_hash from members m join rooms r on r.id = m.room_id where lower(r.code) = $1 and m.member_id = 'u1'",
+      [code.toLowerCase()],
+    );
+    assert.equal(freed.rows[0].session_token_hash, null, "the old digest must be gone");
+    // The old bearer is spent, and the id is claimable again without one.
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(session.token))).statusCode, 404);
+    const reclaimed = await joinRoom(code, "u1", "小安");
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(reclaimed.token))).statusCode, 200);
+  });
+
   test("a member listed in a snapshot but never joined can still claim that id", async () => {
     const code = await newRoom();
     const writer = await joinRoom(code, "u1", "小安");

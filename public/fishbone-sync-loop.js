@@ -31,7 +31,7 @@
              snapshot would only cause a needless conflict on the next push. */
           if((data.revision||0)<SYNC.revision)continue;
           applyRoomPolicy(data);SYNC.revision=data.revision||0;
-          SYNC.serverJson=canonJson(data.snapshot||{});
+          SYNC.serverJson=serverSnapshotJson(data.snapshot);
           applyRemote(data.snapshot,data.currentStep);
           schedulePush();
         }catch(e){
@@ -61,7 +61,7 @@
             throw new Error("HTTP 404");
           }
           if(res.status===429){let wait=retryAfterMs(res);setSyncStatus(false,"伺服器暫時限制了請求，"+Math.round(wait/1000)+" 秒後自動再試。");setTimeout(schedulePush,wait);return false}
-          if(res.status===409){let other=await res.json();applyRoomPolicy(other);SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot,other.currentStep);continue}
+          if(res.status===409){let other=await res.json();applyRoomPolicy(other);SYNC.revision=other.revision||0;SYNC.serverJson=serverSnapshotJson(other.snapshot);applyRemote(other.snapshot,other.currentStep);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
           /* Only move forward: a poll running in parallel may already have seen
@@ -92,7 +92,7 @@
         let res=await fetch(roomApi("state"),{cache:"no-store",headers:syncHeaders(false)});
         if(!res.ok)return;
         let data=await res.json();
-        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
+        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);
         applyRemote(data.snapshot,data.currentStep);schedulePush();
       }catch(e){}
     }

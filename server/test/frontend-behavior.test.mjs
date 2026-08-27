@@ -103,7 +103,7 @@ if (!databaseUrl) {
 
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
-    "requestAiReview", "sharedSnapshot", "canonJson", "loadRoomToken", "pushRoom",
+    "requestAiReview", "sharedSnapshot", "canonJson", "serverSnapshotJson", "loadRoomToken", "pushRoom",
     "runMethodAiCheck", "applyRemote", "renameDraftCat", "renameDraftMethodCat",
     "submitCauseClass", "submitMethodClass",
   ];
@@ -169,6 +169,7 @@ if (!databaseUrl) {
       createElement: () => element(),
       title: "",
     };
+    const requests = [];
     const scope = {
       location: { protocol: "http:", pathname: "/fishbone.html", href: `${origin}/fishbone.html` },
       window: { addEventListener() {}, removeEventListener() {} },
@@ -178,7 +179,10 @@ if (!databaseUrl) {
       localStorage: store(sharedLocal),
       // The scripts build a same-origin path from location.pathname; the test
       // server is on an ephemeral port, so resolve that path against it.
-      fetch: (url, init) => fetch(new URL(url, origin), init),
+      fetch: (url, init) => {
+        requests.push({ url: String(url), method: init?.method ?? "GET" });
+        return fetch(new URL(url, origin), init);
+      },
       alert() {},
       confirm: () => true,
     };
@@ -188,6 +192,7 @@ if (!databaseUrl) {
       document: documentStub,
       elements,
       queryResults,
+      requests,
       fire(type, event) {
         for (const handler of listeners.get(type) || []) handler(event);
       },
@@ -228,6 +233,34 @@ if (!databaseUrl) {
     assert.equal(reloaded.S.selfId, tab.S.selfId, "the member id is tab-scoped, not per load");
     assert.equal(await reloaded.connectRoom(true), "ok");
     assert.notEqual(reloaded.SYNC.token, tab.SYNC.token, "the session rotates on re-join");
+  });
+
+  test("an unchanged authoritative snapshot issues no state POST", async () => {
+    const code = await newRoom();
+    const tab = openTab();
+    tab.S.roomCode = code;
+    tab.S.nameDraft = "小安";
+    tab.S.joined = true;
+
+    assert.equal(await tab.connectRoom(true), "ok");
+    if (tab.SYNC.pushTimer) clearTimeout(tab.SYNC.pushTimer);
+    tab.SYNC.pushTimer = null;
+
+    // The first upload gives PostgreSQL a complete browser-owned snapshot.
+    // Rejoining then exercises the authoritative hydrate path that previously
+    // added four server-only fields and defeated the no-op guard.
+    assert.equal(await tab.pushRoom(), true);
+    assert.equal(await tab.connectRoom(true), "ok");
+    if (tab.SYNC.pushTimer) clearTimeout(tab.SYNC.pushTimer);
+    tab.SYNC.pushTimer = null;
+    tab.requests.length = 0;
+
+    assert.equal(tab.canonJson(tab.sharedSnapshot()), tab.SYNC.serverJson);
+    assert.equal(await tab.pushRoom(), true);
+    assert.deepEqual(
+      tab.requests.filter((request) => request.method === "POST" && request.url.endsWith("/state")),
+      [],
+    );
   });
 
   test("a second tab cannot take over a member id it does not hold the token for", async () => {

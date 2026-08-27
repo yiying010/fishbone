@@ -43,6 +43,10 @@
        two would push at each other for the whole lesson. Only this comparison
        ignores order; what is actually sent keeps the local order untouched. */
     function canonJson(v){if(v===undefined)return "null";if(v===null||typeof v!=="object")return JSON.stringify(v);if(Array.isArray(v)){let parts=v.map(canonJson);if(v.every(x=>x&&typeof x==="object"&&!Array.isArray(x)&&typeof x.id==="string"))parts.sort();return "["+parts.join(",")+"]"}return "{"+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+":"+canonJson(v[k])).join(",")+"}"}
+    /* Hydrate adds metadata that belongs to the server's relational projection,
+       not to the browser snapshot. Compare only the client-owned shape on both
+       sides, otherwise every repaint treats an unchanged room as dirty. */
+    function serverSnapshotJson(snapshot){let remote=snapshot||{},data={};Object.keys(sharedSnapshot()).forEach(key=>{data[key]=remote[key]});return canonJson(data)}
     function syncSleep(ms){return new Promise(r=>setTimeout(r,ms))}
     function retryAfterMs(res){let header=Number(res.headers.get("retry-after"));return Math.min(60000,Math.max(1000,(Number.isFinite(header)&&header>0?header:5)*1000))}
     function syncOnlineText(){return "已連上小組伺服器，其他裝置的更新會自動出現。"}
@@ -148,7 +152,7 @@
         SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);saveRoomContext();
         // Anything the caller wants merged before the server's snapshot lands.
         if(beforeApply)beforeApply();
-        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});SYNC.failures=0;
+        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);SYNC.failures=0;
         applyRemote(data.snapshot,data.currentStep);
         setSyncStatus(true,syncOnlineText());
         pollLoop(session);schedulePush();
@@ -182,7 +186,7 @@
         if(!res.ok)return false;
         let data=await res.json();
         if(SYNC.session!==session)return false;
-        SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
+        SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);
         applyRemote(data.snapshot,data.currentStep);
         return true;
       }catch(e){return false}

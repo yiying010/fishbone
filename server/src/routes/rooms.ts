@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { Readable } from "node:stream";
 import { assertSnapshot, withoutNul } from "../domain/snapshot.ts";
 import { formatRoomCode, normalizeRoomCode } from "../rooms/codes.ts";
 import { normalizeMemberId } from "../rooms/member-id.ts";
@@ -36,7 +37,24 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
    * route: joining an unknown code fails rather than bringing one into being,
    * so no code is ever chosen by a person.
    */
-  app.post("/api/rooms", async (request, reply) => {
+  app.post("/api/rooms", {
+    // Fastify rejects an empty application/json payload before the route
+    // handler. Old clients may still send that header on an otherwise empty
+    // creation request, so turn only an explicitly zero-byte body into {} and
+    // leave Fastify's normal JSON parser in charge of every non-empty body.
+    preParsing: (request, _reply, payload, done) => {
+      const contentType = String(request.headers["content-type"] ?? "").toLowerCase();
+      if (contentType.startsWith("application/json") && request.headers["content-length"] === "0") {
+        // The built-in parser honours Content-Length while consuming the
+        // replacement stream, so keep the header consistent with `{}`.
+        request.headers["content-length"] = "2";
+        request.raw.headers["content-length"] = "2";
+        done(null, Readable.from(["{}"]));
+        return;
+      }
+      done(null, payload);
+    },
+  }, async (request, reply) => {
     const overall = limiters.requests?.take(request.ip);
     if (overall && !overall.allowed) return rateLimited(reply, overall.retryAfterSeconds);
     const creates = limiters.roomCreates?.take(request.ip);

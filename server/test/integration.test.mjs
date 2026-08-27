@@ -92,6 +92,16 @@ if (!databaseUrl) {
     assert.match(json(response).room, /^[0-9abcdefghjkmnpqrstvwxyz]+$/);
   });
 
+  test("room creation accepts an explicitly empty JSON body", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/rooms",
+      headers: { "content-type": "application/json", "content-length": "0" },
+      payload: "",
+    });
+    assert.equal(response.statusCode, 201, response.body);
+  });
+
   test("healthz turns non-200 when the schema it depends on is gone", async () => {
     await pool.query("alter table schema_migrations rename to schema_migrations_hidden");
     try {

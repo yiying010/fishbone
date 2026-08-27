@@ -15,7 +15,6 @@ import {
   authenticateRoom,
   bearerToken,
   displayName,
-  expectedMemberCount,
   gateRoomRequest,
   rateLimited,
   requestBody,
@@ -62,17 +61,12 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
 
     // Room creation historically accepts an empty POST. Keep that compatible
     // with cached clients and probes that do not send JSON at all.
-    const payload = request.body === undefined ? {} : requestBody(request);
-    const created = await store.createRoom(
-      config.roomCodeLength,
-      expectedMemberCount(payload["expectedMemberCount"]),
-    );
+    if (request.body !== undefined) requestBody(request);
+    const created = await store.createRoom(config.roomCodeLength);
     reply.code(201).header("cache-control", "no-store");
     return {
       room: created.code,
       displayCode: formatRoomCode(created.code),
-      expectedMemberCount: created.expectedMemberCount,
-      membersLocked: created.membersLocked,
       members: [],
     };
   });
@@ -124,19 +118,23 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
     // Stops an intermediate nginx from buffering a held response.
     reply.header("x-accel-buffering", "no");
 
-    const first = await store.read(roomCode);
+    const first = await store.readSummary(roomCode);
     if (first === null) return roomNotFound(request, reply, limiters);
     const memberStep = first.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? first.currentStep;
     if (!hasSince || first.revision !== since) {
-      return { room: roomCode, ...first, currentStep: memberStep };
+      const full = await store.read(roomCode);
+      if (full === null) return roomNotFound(request, reply, limiters);
+      return {
+        room: roomCode,
+        ...full,
+        currentStep: full.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? full.currentStep,
+      };
     }
     if (!wantsHold) {
       return {
         room: roomCode,
         revision: first.revision,
         currentStep: memberStep,
-        expectedMemberCount: first.expectedMemberCount,
-        membersLocked: first.membersLocked,
         members: first.members,
         unchanged: true,
       };
@@ -148,8 +146,6 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
         room: roomCode,
         revision: since,
         currentStep: memberStep,
-        expectedMemberCount: first.expectedMemberCount,
-        membersLocked: first.membersLocked,
         members: first.members,
         unchanged: true,
       };

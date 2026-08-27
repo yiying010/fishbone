@@ -27,8 +27,6 @@ interface VoteRow {
   member_id: string;
   value: string;
   content_version: number;
-  deleted_version: number;
-  deleted_at: string | null;
 }
 
 interface VoteRoundRow {
@@ -125,7 +123,7 @@ export async function buildAuthoritativeSnapshot(
       [roomId],
     ),
     db.query<VoteRow>(
-      `select kind, round, member_id, value, content_version, deleted_version, deleted_at
+      `select kind, round, member_id, value, content_version
          from votes
         where room_id = $1
         order by kind, round, member_id`,
@@ -176,7 +174,6 @@ export async function buildAuthoritativeSnapshot(
     joined: member.has_joined,
   }));
 
-  const voteTombstones: Record<string, unknown>[] = [];
   const authoritativeVoteVersions: Record<string, number> = {};
   const versionBySnapshotField: Record<string, number> = {};
   for (const { kind, field, roundField, resolvedField } of VOTE_KINDS) {
@@ -188,20 +185,12 @@ export async function buildAuthoritativeSnapshot(
     const ballots: Record<string, unknown> = {};
 
     for (const row of rows) {
-      if (row.round === currentRound && live(row)) {
+      if (row.round === currentRound) {
         ballots[row.member_id] = {
           value: row.value,
           round: row.round,
           contentVersion: row.content_version,
         };
-      }
-      if (row.deleted_at !== null && row.deleted_version > row.content_version) {
-        voteTombstones.push({
-          kind: row.kind,
-          round: row.round,
-          memberId: row.member_id,
-          deletedVersion: row.deleted_version,
-        });
       }
     }
 
@@ -212,7 +201,7 @@ export async function buildAuthoritativeSnapshot(
 
     authoritativeVoteVersions[kind] = maximum([
       ...kindRounds.map((row) => row.content_version),
-      ...rows.map((row) => Math.max(row.content_version, row.deleted_version)),
+      ...rows.map((row) => row.content_version),
     ]);
     const versionField = VOTE_VERSION_FIELDS[kind];
     // grouping and groupConfirm deliberately share groupingVersion. Preserve
@@ -227,7 +216,6 @@ export async function buildAuthoritativeSnapshot(
     }
   }
 
-  snapshot["voteTombstones"] = voteTombstones;
   snapshot["authoritativeVoteVersions"] = authoritativeVoteVersions;
   return snapshot;
 }

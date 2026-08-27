@@ -4,7 +4,6 @@ import { SnapshotError } from "../domain/snapshot.ts";
 import { RoomCodeFormatError } from "../rooms/codes.ts";
 import {
   MemberIdentityError,
-  RoomCapacityError,
   RoomCodeError,
   RoomNotFoundError,
 } from "../rooms/errors.ts";
@@ -38,10 +37,6 @@ export function registerRoomErrorHandler(app: FastifyInstance, config: AppConfig
     if (error instanceof MemberIdentityError) {
       reply.code(409);
       return reply.send({ error: "member_id_in_use" });
-    }
-    if (error instanceof RoomCapacityError) {
-      reply.code(409);
-      return reply.send({ error: "room_full_or_locked" });
     }
     // Fastify's JSON parser and content-type handling report a client mistake
     // through statusCode. Keep that 4xx outcome, but without the parser's own

@@ -58,11 +58,20 @@ export async function projectSubmissions(
     [roomId, kinds, ids, steps, authors, bodies, statuses, payloads, versions],
   );
 
-  for (const row of inlineTombstones) {
-    await client.query(
-      `insert into submissions
-         (room_id, kind, item_id, step, author_member_id, body, status, payload, deleted_version, deleted_at)
-       values ($1, $2, $3, $4, $5, '', $6, $7::jsonb, $8, now())
+  const tombstoneKinds = inlineTombstones.map((row) => row.kind);
+  const tombstoneIds = inlineTombstones.map((row) => row.item.id);
+  const tombstoneSteps = inlineTombstones.map((row) => row.step);
+  const tombstoneAuthors = inlineTombstones.map((row) => row.item.author);
+  const tombstoneStatuses = inlineTombstones.map((row) => row.item.status);
+  const tombstonePayloads = inlineTombstones.map((row) => JSON.stringify(row.item.payload));
+  const tombstoneVersions = inlineTombstones.map(versionFor);
+  await client.query(
+    `insert into submissions
+       (room_id, kind, item_id, step, author_member_id, body, status, payload, deleted_version, deleted_at)
+     select $1, t.kind, t.item_id, t.step, t.author, '', t.status,
+            t.payload::jsonb, t.deleted_version, now()
+       from unnest($2::text[], $3::text[], $4::int[], $5::text[], $6::text[], $7::text[], $8::bigint[])
+         as t(kind, item_id, step, author, status, payload, deleted_version)
        on conflict (room_id, kind, item_id) do update
          set author_member_id = coalesce(excluded.author_member_id, submissions.author_member_id),
              status           = excluded.status,
@@ -72,18 +81,17 @@ export async function projectSubmissions(
              updated_at       = now()
        where excluded.deleted_version > submissions.deleted_version
          and excluded.deleted_version > submissions.content_version`,
-      [
-        roomId,
-        row.kind,
-        row.item.id,
-        row.step,
-        row.item.author,
-        row.item.status,
-        JSON.stringify(row.item.payload),
-        versionFor(row),
-      ],
-    );
-  }
+    [
+      roomId,
+      tombstoneKinds,
+      tombstoneIds,
+      tombstoneSteps,
+      tombstoneAuthors,
+      tombstoneStatuses,
+      tombstonePayloads,
+      tombstoneVersions,
+    ],
+  );
 
   // Snapshot absence is never a deletion. Only explicit collection tombstones
   // are allowed to hide a card, and only when their version is newer.
@@ -94,6 +102,7 @@ export async function projectSubmissions(
     goal_idea: "deletedGoalIdeaIds",
     method: "deletedMethodIds",
   };
+  const collectionTombstones: { kind: string; itemId: string; deletedVersion: number }[] = [];
   for (const { kind, field } of ITEM_KINDS) {
     const deletedField = deletedFields[kind];
     if (deletedField === undefined) continue;
@@ -101,22 +110,36 @@ export async function projectSubmissions(
     const version = monotonicVersion(snapshot[`${field}Version`]);
     for (const itemId of deleted) {
       if (typeof itemId !== "string" || itemId === "") continue;
-      // Collection tombstones must target an existing card owned by the
-      // authenticated author. Do not create a tombstone for a missing id: that
-      // would let one member pre-empt another member's future card.
-      await client.query(
-        `update submissions
-            set deleted_version = $4,
-                deleted_at      = now(),
-                updated_at      = now()
-          where room_id = $1
-            and kind = $2
-            and item_id = $3
-            and $4 > deleted_version
-            and $4 > content_version
-            and (author_member_id = $5 or author_member_id in ('group', 'unknown'))`,
-        [roomId, kind, itemId, version, memberId],
-      );
+      collectionTombstones.push({ kind, itemId, deletedVersion: version });
     }
   }
+  const collectionRows = dedupe(
+    collectionTombstones,
+    (row) => row.kind + KEY_SEPARATOR + row.itemId,
+  );
+  // Collection tombstones must target an existing card owned by the
+  // authenticated author. Do not create a tombstone for a missing id: that
+  // would let one member pre-empt another member's future card. One batched
+  // update keeps this work bounded while the room row lock is held.
+  await client.query(
+    `update submissions as existing
+        set deleted_version = tombstone.deleted_version,
+            deleted_at      = now(),
+            updated_at      = now()
+       from unnest($2::text[], $3::text[], $4::bigint[])
+         as tombstone(kind, item_id, deleted_version)
+      where existing.room_id = $1
+        and existing.kind = tombstone.kind
+        and existing.item_id = tombstone.item_id
+        and tombstone.deleted_version > existing.deleted_version
+        and tombstone.deleted_version > existing.content_version
+        and (existing.author_member_id = $5 or existing.author_member_id in ('group', 'unknown'))`,
+    [
+      roomId,
+      collectionRows.map((row) => row.kind),
+      collectionRows.map((row) => row.itemId),
+      collectionRows.map((row) => row.deletedVersion),
+      memberId,
+    ],
+  );
 }

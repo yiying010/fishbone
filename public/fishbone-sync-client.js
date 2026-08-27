@@ -53,13 +53,6 @@
     function setSyncStatus(connected,msg){SYNC.connected=connected;SYNC.status=msg;let el=$("syncStatus");if(el){el.textContent=msg;el.className=connected?"syncNote ok":"syncNote"}}
     function applyRoomPolicy(data){
       if(!data)return false;let changed=false;
-      if(Object.prototype.hasOwnProperty.call(data,"expectedMemberCount")){
-        let count=data.expectedMemberCount===null?null:Number(data.expectedMemberCount);
-        if((count===null||Number.isInteger(count))&&S.expectedMemberCount!==count){S.expectedMemberCount=count;changed=true}
-      }
-      if(Object.prototype.hasOwnProperty.call(data,"membersLocked")){
-        let locked=!!data.membersLocked;if(S.membersLocked!==locked){S.membersLocked=locked;changed=true}
-      }
       if(Array.isArray(data.members))data.members.forEach((member,index)=>{
         if(!member||!member.memberId)return;
         let source=S.sources.find(s=>s.id===member.memberId),name=String(member.displayName||member.name||"");
@@ -152,7 +145,7 @@
            missing room and a mistyped one without saying which. */
         if(res.status===404||res.status===400){SYNC.session=0;setSyncStatus(false,"找不到這個房間碼。");return "not-found"}
         if(res.status===429){SYNC.session=0;setSyncStatus(false,"嘗試次數過多，請稍候再試。");return "rate-limited"}
-        if(res.status===409){let error=await res.json().catch(()=>({}));SYNC.session=0;if(error.error==="room_full_or_locked"){setSyncStatus(false,"這個小組目前不接受新成員。");return "room-full"}setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
+        if(res.status===409){SYNC.session=0;setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();
         if(SYNC.session!==session)return "error";

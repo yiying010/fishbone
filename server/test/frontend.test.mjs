@@ -329,6 +329,8 @@ test("ordinary back navigation is read-only while designated return-edit steps s
   assert.match(html, /function historyReturnEditable\(/);
   assert.match(html, /🚫 僅供查看/);
   assert.match(html, /main\.querySelectorAll\("input,textarea,select,button"\)/);
+  assert.match(html, /main\.querySelectorAll\("\[ondrop\],\[ondragover\]"\)/);
+  assert.match(html, /removeAttribute\("ondrop"\)/);
   assert.match(html, /origin===9&&target===8/);
   assert.match(html, /origin===16&&target===15/);
   assert.match(html, /origin===18&&target===17/);

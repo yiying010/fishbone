@@ -175,4 +175,26 @@ export const migrations: Migration[] = [
         where deleted_at is null and content_version >= deleted_version;
     `,
   },
+  {
+    id: "0006_remove_unused_membership_policy",
+    sql: /* sql */ `
+      -- The activity intentionally uses the members who actually joined. The
+      -- fixed-capacity policy never had a teacher-facing control and could
+      -- otherwise become a dormant path that unexpectedly refuses a student.
+      alter table rooms
+        drop constraint if exists rooms_expected_member_count_check,
+        drop column if exists expected_member_count,
+        drop column if exists members_locked;
+
+      -- Voting never deletes a ballot in place; a restart opens a new round.
+      -- Remove the unused tombstone path instead of carrying a protocol that
+      -- no product action can produce.
+      delete from votes
+        where deleted_at is not null and deleted_version > content_version;
+      drop index if exists votes_live_room_kind_round_idx;
+      alter table votes
+        drop column if exists deleted_at,
+        drop column if exists deleted_version;
+    `,
+  },
 ];

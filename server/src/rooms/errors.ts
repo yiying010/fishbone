@@ -3,9 +3,6 @@ export class RoomCodeError extends Error {}
 /** A public member id is already bound to another browser session. */
 export class MemberIdentityError extends Error {}
 
-/** The room reached its expected membership and no longer accepts newcomers. */
-export class RoomCapacityError extends Error {}
-
 /**
  * The room code is well formed but no such room exists. Distinct from
  * RoomCodeError because the client has to react differently: a malformed code

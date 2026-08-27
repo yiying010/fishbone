@@ -5,13 +5,12 @@ import { withTransaction, type Pool, type PoolClient } from "../db/pool.ts";
 import { AdminRoomRepository } from "./admin-repository.ts";
 import { ArtifactRepository, type ArtifactInput } from "./artifact-repository.ts";
 import { generateRoomCode } from "./codes.ts";
-import { MemberIdentityError, RoomCapacityError, RoomNotFoundError } from "./errors.ts";
+import { MemberIdentityError, RoomNotFoundError } from "./errors.ts";
 import { RetentionRepository } from "./retention-repository.ts";
 import { buildAuthoritativeSnapshot } from "./authoritative-snapshot.ts";
 
 export {
   MemberIdentityError,
-  RoomCapacityError,
   RoomCodeError,
   RoomNotFoundError,
 } from "./errors.ts";
@@ -21,8 +20,6 @@ export interface RoomState {
   revision: number;
   snapshot: Snapshot;
   currentStep: number;
-  expectedMemberCount: number | null;
-  membersLocked: boolean;
   members: RoomMember[];
 }
 
@@ -43,8 +40,6 @@ export interface WriteConflict {
   revision: number;
   snapshot: Snapshot;
   currentStep: number;
-  expectedMemberCount: number | null;
-  membersLocked: boolean;
   members: RoomMember[];
 }
 
@@ -55,8 +50,18 @@ interface RoomRow {
   revision: number;
   snapshot: Snapshot;
   current_step: number;
-  expected_member_count: number | null;
-  members_locked: boolean;
+}
+
+interface RoomSummaryRow {
+  id: number;
+  revision: number;
+  current_step: number;
+}
+
+export interface RoomSummary {
+  revision: number;
+  currentStep: number;
+  members: RoomMember[];
 }
 
 export interface JoinResult extends RoomState {
@@ -125,21 +130,18 @@ export class RoomStore {
    * a guessed code cannot bring a room into existence, and every code that
    * exists came from a CSPRNG rather than from someone naming their class.
    */
-  async createRoom(
-    codeLength: number,
-    expectedMemberCount: number | null,
-  ): Promise<{ code: string; expectedMemberCount: number | null; membersLocked: boolean }> {
+  async createRoom(codeLength: number): Promise<{ code: string }> {
     // A collision at 50 bits is not a thing that happens, but the unique index
     // is the authority, not that assumption.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = generateRoomCode(codeLength);
       const { rowCount } = await this.pool.query(
-        `insert into rooms (code, expected_member_count)
-         values ($1, $2)
+        `insert into rooms (code)
+         values ($1)
          on conflict (lower(code)) do nothing`,
-        [code, expectedMemberCount],
+        [code],
       );
-      if ((rowCount ?? 0) > 0) return { code, expectedMemberCount, membersLocked: false };
+      if ((rowCount ?? 0) > 0) return { code };
     }
     throw new Error("could not allocate an unused room code");
   }
@@ -165,7 +167,7 @@ export class RoomStore {
       const { rows } = await client.query<RoomRow>(
         `update rooms set last_activity_at = now()
           where lower(code) = lower($1)
-          returning id, revision, snapshot, current_step, expected_member_count, members_locked`,
+          returning id, revision, snapshot, current_step`,
         [code],
       );
       const room = rows[0];
@@ -189,27 +191,13 @@ export class RoomStore {
       }
 
       if (existingRow === undefined) {
-        if (room.members_locked) throw new RoomCapacityError("room membership is locked");
-        if (room.expected_member_count !== null) {
-          const count = await client.query<{ count: string }>(
-            `select count(*)::text as count
-               from members
-              where room_id = $1 and not is_system`,
-            [room.id],
-          );
-          newMemberOrdinal = Number(count.rows[0]?.count ?? 0);
-          if (newMemberOrdinal >= room.expected_member_count) {
-            throw new RoomCapacityError("room is full");
-          }
-        } else {
-          const count = await client.query<{ count: string }>(
-            `select count(*)::text as count
-               from members
-              where room_id = $1 and not is_system`,
-            [room.id],
-          );
-          newMemberOrdinal = Number(count.rows[0]?.count ?? 0);
-        }
+        const count = await client.query<{ count: string }>(
+          `select count(*)::text as count
+             from members
+            where room_id = $1 and not is_system`,
+          [room.id],
+        );
+        newMemberOrdinal = Number(count.rows[0]?.count ?? 0);
       }
 
       const token = randomBytes(32).toString("base64url");
@@ -235,19 +223,6 @@ export class RoomStore {
           MEMBER_COLORS[newMemberOrdinal % MEMBER_COLORS.length],
         ],
       );
-
-      if (room.expected_member_count !== null) {
-        const count = await client.query<{ count: string }>(
-          `select count(*)::text as count
-             from members
-            where room_id = $1 and not is_system`,
-          [room.id],
-        );
-        if (Number(count.rows[0]?.count ?? 0) >= room.expected_member_count) {
-          await client.query(`update rooms set members_locked = true where id = $1`, [room.id]);
-          room.members_locked = true;
-        }
-      }
 
       const state = await this.roomState(client, room);
       return {
@@ -285,7 +260,7 @@ export class RoomStore {
 
   async read(code: string): Promise<RoomState | null> {
     const { rows } = await this.pool.query<RoomRow>(
-      `select id, revision, snapshot, current_step, expected_member_count, members_locked
+      `select id, revision, snapshot, current_step
          from rooms where lower(code) = lower($1)`,
       [code],
     );
@@ -293,13 +268,31 @@ export class RoomStore {
     return room === undefined ? null : this.roomState(this.pool, room);
   }
 
+  /**
+   * Reads only the metadata needed by an unchanged long-poll response. This
+   * deliberately avoids rebuilding every projected card and vote on each idle
+   * client poll.
+   */
+  async readSummary(code: string): Promise<RoomSummary | null> {
+    const { rows } = await this.pool.query<RoomSummaryRow>(
+      `select id, revision, current_step
+         from rooms where lower(code) = lower($1)`,
+      [code],
+    );
+    const room = rows[0];
+    if (room === undefined) return null;
+    return {
+      revision: room.revision,
+      currentStep: room.current_step,
+      members: await this.membersForRoom(this.pool, room.id),
+    };
+  }
+
   private async roomState(db: Pool | PoolClient, room: RoomRow): Promise<RoomState> {
     return {
       revision: room.revision,
       snapshot: await buildAuthoritativeSnapshot(db, room.id, room.snapshot),
       currentStep: room.current_step,
-      expectedMemberCount: room.expected_member_count,
-      membersLocked: room.members_locked,
       members: await this.membersForRoom(db, room.id),
     };
   }
@@ -369,7 +362,7 @@ export class RoomStore {
       // Row lock: serialises concurrent writers to the same room so the
       // compare-and-set below cannot be read-modify-written out from under us.
       const { rows } = await client.query<RoomRow>(
-        `select id, revision, snapshot, current_step, expected_member_count, members_locked from rooms
+        `select id, revision, snapshot, current_step from rooms
           where lower(code) = lower($1) for update`,
         [code],
       );
@@ -385,12 +378,11 @@ export class RoomStore {
           revision: room.revision,
           snapshot: await buildAuthoritativeSnapshot(client, room.id, room.snapshot),
           currentStep: members.find((member) => member.memberId === memberId)?.currentStep ?? room.current_step,
-          expectedMemberCount: room.expected_member_count,
-          membersLocked: room.members_locked,
           members,
         };
       }
 
+      const durableSnapshot = preserveDurableRevisionFields(room.snapshot ?? {}, snapshot);
       const { rows: updated } = await client.query<{ revision: number }>(
         `update rooms
             set snapshot         = $2::jsonb,
@@ -399,12 +391,12 @@ export class RoomStore {
                 last_activity_at = now()
           where id = $1
           returning revision`,
-        [room.id, JSON.stringify(preserveDurableRevisionFields(room.snapshot ?? {}, snapshot))],
+        [room.id, JSON.stringify(durableSnapshot)],
       );
       const revision = updated[0]?.revision;
       if (revision === undefined) throw new Error("room update returned no row");
 
-      await projectSnapshot(client, snapshot, { roomId: room.id, memberId, step });
+      await projectSnapshot(client, durableSnapshot, { roomId: room.id, memberId, step });
 
       const { rows: progressRows } = await client.query<{ current_step: number }>(
         `select coalesce(

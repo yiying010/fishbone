@@ -1,7 +1,6 @@
 import type { PoolClient } from "../../db/pool.ts";
 import {
   VOTE_KINDS,
-  clampRound,
   monotonicVersion,
   readBoolean,
   readRound,
@@ -12,7 +11,6 @@ import {
 import { dedupe, KEY_SEPARATOR } from "./shared.ts";
 
 export async function projectVotes(client: PoolClient, snapshot: Snapshot, roomId: number): Promise<void> {
-  const tombstones = readVoteTombstones(snapshot);
   const roundRows: { kind: string; round: number; tie: boolean; resolved: string; contentVersion: number }[] = [];
   const voteRows: { kind: string; round: number; memberId: string; value: string; contentVersion: number }[] = [];
 
@@ -83,39 +81,10 @@ export async function projectVotes(client: PoolClient, snapshot: Snapshot, roomI
      on conflict (room_id, kind, round, member_id) do update
        set value           = excluded.value,
            content_version = excluded.content_version,
-           deleted_at      = null,
            cast_at         = now()
-       where excluded.content_version > votes.content_version
-         and excluded.content_version > votes.deleted_version`,
+       where excluded.content_version > votes.content_version`,
     [roomId, voteKinds, voteRounds, voteMembers, voteValues, voteVersions],
   );
-
-  for (const tombstone of tombstones) {
-    await client.query(
-      `insert into vote_rounds (room_id, kind, round)
-       values ($1, $2, $3)
-       on conflict (room_id, kind, round) do nothing`,
-      [roomId, tombstone.kind, tombstone.round],
-    );
-    await client.query(
-      `insert into votes (room_id, kind, round, member_id, value, deleted_version, deleted_at)
-       values ($1, $2, $3, $4, '', $5, now())
-       on conflict (room_id, kind, round, member_id) do update
-         set deleted_version = excluded.deleted_version,
-             deleted_at      = excluded.deleted_at,
-             cast_at         = now()
-       where excluded.deleted_version > votes.deleted_version
-         and excluded.deleted_version > votes.content_version`,
-      [roomId, tombstone.kind, tombstone.round, tombstone.memberId, tombstone.deletedVersion],
-    );
-  }
-}
-
-interface VoteTombstone {
-  kind: string;
-  round: number;
-  memberId: string;
-  deletedVersion: number;
 }
 
 const VOTE_VERSION_FIELDS: Record<string, string> = {
@@ -131,21 +100,3 @@ const VOTE_VERSION_FIELDS: Record<string, string> = {
   outcomeRevision: "outcomeRevisionVersion",
   solution: "solutionVoteVersion",
 };
-
-function readVoteTombstones(snapshot: Snapshot): VoteTombstone[] {
-  const supportedKinds = new Set(VOTE_KINDS.map((entry) => entry.kind));
-  const raw = Array.isArray(snapshot["voteTombstones"]) ? snapshot["voteTombstones"] : [];
-  return raw.flatMap((entry) => {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [];
-    const tombstone = entry as Record<string, unknown>;
-    const kind = typeof tombstone["kind"] === "string" ? tombstone["kind"] : "";
-    const memberId = typeof tombstone["memberId"] === "string" ? tombstone["memberId"] : "";
-    if (!supportedKinds.has(kind) || memberId === "") return [];
-    return [{
-      kind,
-      memberId,
-      round: clampRound(tombstone["round"], 1),
-      deletedVersion: monotonicVersion(tombstone["deletedVersion"]),
-    }];
-  });
-}

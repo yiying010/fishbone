@@ -1,7 +1,8 @@
+    function renderServerState(){let wasMuted=syncMuted;syncMuted=true;try{render()}finally{syncMuted=wasMuted}}
     function applyUnchangedRoomPolicy(data){
       if(!applyRoomPolicy(data))return false;
       acknowledgeMemberSources(data);
-      if(!imeComposing&&!activeDraftControl())render();
+      if(!imeComposing&&!activeDraftControl())renderServerState();
       return true;
     }
     async function pollLoop(session){
@@ -74,7 +75,11 @@
              a later revision, and rewinding would strand serverJson on an older
              snapshot. */
           if((data.revision||0)>SYNC.revision){SYNC.revision=data.revision||0;SYNC.serverJson=json}
-          applyRoomPolicy(data);applyAuthoritativeProgress(data.currentStep);
+          let policyChanged=applyRoomPolicy(data),beforeStep=S.step;applyAuthoritativeProgress(data.currentStep);
+          if(policyChanged||S.step!==beforeStep){
+            if(imeComposing||activeDraftControl()){remoteDraftSnapshot=captureRemoteDraft();remotePaintPending=true}
+            else renderServerState();
+          }
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           return true;

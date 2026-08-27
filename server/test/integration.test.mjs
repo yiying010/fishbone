@@ -221,32 +221,25 @@ if (!databaseUrl) {
     assert.equal((await get(`/api/rooms/${code}/state`, auth(rotated.token))).statusCode, 200);
   });
 
-  test("server-authoritative member count locks a room without blocking legitimate reconnects", async () => {
-    assert.equal((await post("/api/rooms", { expectedMemberCount: 0 })).statusCode, 400);
-    assert.equal((await post("/api/rooms", { expectedMemberCount: 13 })).statusCode, 400);
+  test("rooms use the members who actually join and never apply a dormant fixed capacity", async () => {
     const created = await post("/api/rooms", { expectedMemberCount: 2 });
     assert.equal(created.statusCode, 201, created.body);
     const room = json(created);
     const code = room.room;
-    assert.equal(room.expectedMemberCount, 2);
-    assert.equal(room.membersLocked, false);
+    assert.equal("expectedMemberCount" in room, false);
+    assert.equal("membersLocked" in room, false);
 
     const firstResponse = await post(
       `/api/rooms/${code}/join`,
-      { memberId: "u1", name: "同名成員", step: 2, expectedMemberCount: 12 },
+      { memberId: "u1", name: "同名成員", step: 2 },
     );
     assert.equal(firstResponse.statusCode, 200, firstResponse.body);
     const first = json(firstResponse);
-    assert.equal(first.expectedMemberCount, 2);
-    assert.equal(first.membersLocked, false);
-
     const second = await joinRoom(code, "u2", "同名成員");
-    assert.equal(second.membersLocked, true);
     assert.deepEqual(second.members.map((member) => member.memberId), ["u1", "u2"]);
 
-    const full = await post(`/api/rooms/${code}/join`, { memberId: "u3", name: "同名成員", step: 2 });
-    assert.equal(full.statusCode, 409);
-    assert.equal(json(full).error, "room_full_or_locked");
+    const third = await joinRoom(code, "u3", "第三位成員");
+    assert.deepEqual(third.members.map((member) => member.memberId), ["u1", "u2", "u3"]);
 
     const takeover = await post(
       `/api/rooms/${code}/join`,
@@ -258,18 +251,16 @@ if (!databaseUrl) {
 
     const reconnectedFirst = await joinRoom(code, "u1", "同名成員", 2, auth(first.token));
     const reconnectedSecond = await joinRoom(code, "u2", "同名成員", 2, auth(second.token));
-    assert.equal(reconnectedFirst.membersLocked, true);
-    assert.equal(reconnectedSecond.membersLocked, true);
-    assert.deepEqual(reconnectedSecond.members.map((member) => member.memberId), ["u1", "u2"]);
+    assert.deepEqual(reconnectedSecond.members.map((member) => member.memberId), ["u1", "u2", "u3"]);
 
     const hydrated = json(await get(`/api/rooms/${code}/state`, auth(reconnectedFirst.token)));
-    assert.equal(hydrated.expectedMemberCount, 2);
-    assert.equal(hydrated.membersLocked, true);
-    assert.deepEqual(hydrated.members.map((member) => member.memberId), ["u1", "u2"]);
+    assert.equal("expectedMemberCount" in hydrated, false);
+    assert.equal("membersLocked" in hydrated, false);
+    assert.deepEqual(hydrated.members.map((member) => member.memberId), ["u1", "u2", "u3"]);
   });
 
   test("one member advancing does not drag another member past an unfinished step", async () => {
-    const created = json(await post("/api/rooms", { expectedMemberCount: 2 }));
+    const created = json(await post("/api/rooms", {}));
     const first = await joinRoom(created.room, "u1", "小安", 2);
     const second = await joinRoom(created.room, "u2", "小美", 2);
 
@@ -660,7 +651,7 @@ if (!databaseUrl) {
       [roomId],
     )).rows;
     const liveVotes = async () => (await pool.query(
-      "select member_id, value from votes where room_id = $1 and kind = 'grouping' and round = 1 and deleted_at is null order by member_id",
+      "select member_id, value from votes where room_id = $1 and kind = 'grouping' and round = 1 order by member_id",
       [roomId],
     )).rows;
     assert.deepEqual((await liveCards()).map((row) => row.item_id), ["d1", "d2"]);
@@ -685,10 +676,9 @@ if (!databaseUrl) {
       distressesVersion: 3,
       groupingRound: 1,
       groupingVotes: { u2: ballot("gp-b", 1, 1) },
-      voteTombstones: [{ kind: "grouping", round: 1, memberId: "u1", deletedVersion: 3 }],
     });
     assert.deepEqual((await liveCards()).map((row) => row.item_id), ["d2"]);
-    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u2"]);
+    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u1", "u2"]);
 
     await write(b, revision, {
       distresses: [item("d1", "舊資料不能復活", "u1", 2), item("d2", "阿凱的困擾", "u2", 1)],
@@ -696,7 +686,8 @@ if (!databaseUrl) {
       groupingVotes: { u1: ballot("gp-revive", 1, 2), u2: ballot("gp-b", 1, 1) },
     });
     assert.deepEqual((await liveCards()).map((row) => row.item_id), ["d2"]);
-    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u2"]);
+    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u1", "u2"]);
+    assert.equal((await liveVotes()).find((row) => row.member_id === "u1").value, "gp-new");
   });
 
   test("authoritative hydrate keeps the highest version shared by grouping vote kinds", async () => {
@@ -1129,7 +1120,7 @@ if (!databaseUrl) {
   });
 
   test("authoritative hydrate survives closed clients and a fresh app instance", async () => {
-    const created = await post("/api/rooms", { expectedMemberCount: 2 });
+    const created = await post("/api/rooms", {});
     assert.equal(created.statusCode, 201, created.body);
     const code = json(created).room;
     const firstMember = await joinRoom(code, "u1", "小安", 2);
@@ -1178,8 +1169,6 @@ if (!databaseUrl) {
     });
 
     const assertHydrated = (body) => {
-      assert.equal(body.expectedMemberCount, 2);
-      assert.equal(body.membersLocked, true);
       assert.deepEqual(body.members.map((member) => member.memberId).sort(), ["u1", "u2"]);
       assert.equal(body.currentStep, 15);
       assert.deepEqual(body.snapshot.distresses.map((item) => item.id), ["d2"]);

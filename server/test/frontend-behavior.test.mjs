@@ -94,8 +94,10 @@ if (!databaseUrl) {
     "fishbone-steps-solution.js",
     "fishbone-cards.js",
     "fishbone-methods.js",
+    "fishbone-revote.js",
     "fishbone-diagram-data.js",
     "fishbone-svg.js",
+    "fishbone-revision.js",
   ];
   const sources = await Promise.all(
     SCRIPTS.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")),

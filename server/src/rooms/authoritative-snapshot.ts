@@ -214,7 +214,12 @@ export async function buildAuthoritativeSnapshot(
       ...rows.map((row) => Math.max(row.content_version, row.deleted_version)),
     ]);
     const versionField = VOTE_VERSION_FIELDS[kind];
-    if (versionField !== undefined) snapshot[versionField] = authoritativeVoteVersions[kind];
+    // grouping and groupConfirm deliberately share groupingVersion. Preserve
+    // the highest authoritative value instead of letting the later kind
+    // overwrite a newer vote with its own lower version.
+    if (versionField !== undefined) {
+      snapshot[versionField] = maximum([Number(snapshot[versionField]), authoritativeVoteVersions[kind]]);
+    }
   }
 
   snapshot["voteTombstones"] = voteTombstones;

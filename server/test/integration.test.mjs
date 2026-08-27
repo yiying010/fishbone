@@ -689,6 +689,30 @@ if (!databaseUrl) {
     assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u2"]);
   });
 
+  test("authoritative hydrate keeps the highest version shared by grouping vote kinds", async () => {
+    const code = await newRoom();
+    const session = await joinRoom(code, "u1", "小安");
+    const written = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 3,
+        baseRevision: 0,
+        snapshot: snapshot({
+          groupingRound: 1,
+          groupingVersion: 7,
+          groupingVotes: { u1: { value: "gp1", round: 1, contentVersion: 9000 } },
+        }),
+      },
+      auth(session.token),
+    );
+    assert.equal(written.statusCode, 200, written.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(session.token)));
+    assert.equal(hydrated.snapshot.groupingVersion, 9000);
+    assert.equal(hydrated.snapshot.authoritativeVoteVersions.grouping, 9000);
+    assert.equal(hydrated.snapshot.authoritativeVoteVersions.groupConfirm, 7);
+  });
+
   test("a deleted card becomes an explicit tombstone", async () => {
     const code = await newRoom();
     const session = await joinRoom(code, "u1", "小安");

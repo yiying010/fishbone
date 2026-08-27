@@ -68,8 +68,8 @@ if (!databaseUrl) {
     return json(response).room;
   };
 
-  const joinRoom = async (code, memberId, name, step = 2) => {
-    const response = await post(`/api/rooms/${code}/join`, { memberId, name, step });
+  const joinRoom = async (code, memberId, name, step = 2, headers) => {
+    const response = await post(`/api/rooms/${code}/join`, { memberId, name, step }, headers);
     assert.equal(response.statusCode, 200, response.body);
     return json(response);
   };
@@ -135,12 +135,12 @@ if (!databaseUrl) {
 
   test("an unauthenticated caller cannot tell an existing room from one that never existed", async () => {
     const real = await newRoom();
-    await joinRoom(real, "u1", "小安");
+    const realSession = await joinRoom(real, "u1", "小安");
     await post(`/api/rooms/${real}/state`, {
       step: 2,
       baseRevision: 0,
       snapshot: snapshot({ distresses: [{ id: "d1", text: "私密的困擾", createdBy: "u1" }] }),
-    }, auth((await joinRoom(real, "u1", "小安")).token));
+    }, auth(realSession.token));
 
     // The room now holds real content. Every way of asking about it without a
     // session must be indistinguishable from asking about a room that is not
@@ -182,6 +182,114 @@ if (!databaseUrl) {
     const crossed = await get(`/api/rooms/${theirs}/state`, auth(session.token));
     assert.equal(crossed.statusCode, 404);
     assert.deepEqual(json(crossed), { error: "room_not_found" });
+  });
+
+  test("a public member id cannot be used to take over another session", async () => {
+    const code = await newRoom();
+    const owner = await joinRoom(code, "u1", "小安");
+    const attacker = await joinRoom(code, "u2", "阿凱");
+
+    const takeover = await post(
+      `/api/rooms/${code}/join`,
+      { memberId: "u1", name: "冒用者", step: 2 },
+      auth(attacker.token),
+    );
+    assert.equal(takeover.statusCode, 409);
+    assert.equal(json(takeover).error, "member_id_in_use");
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(owner.token))).statusCode, 200);
+
+    const rotated = await joinRoom(code, "u1", "小安", 2, auth(owner.token));
+    assert.notEqual(rotated.token, owner.token);
+    assert.equal((await get(`/api/rooms/${code}/state`, auth(rotated.token))).statusCode, 200);
+  });
+
+  test("server-authoritative member count locks a room without blocking legitimate reconnects", async () => {
+    assert.equal((await post("/api/rooms", { expectedMemberCount: 0 })).statusCode, 400);
+    assert.equal((await post("/api/rooms", { expectedMemberCount: 13 })).statusCode, 400);
+    const created = await post("/api/rooms", { expectedMemberCount: 2 });
+    assert.equal(created.statusCode, 201, created.body);
+    const room = json(created);
+    const code = room.room;
+    assert.equal(room.expectedMemberCount, 2);
+    assert.equal(room.membersLocked, false);
+
+    const firstResponse = await post(
+      `/api/rooms/${code}/join`,
+      { memberId: "u1", name: "同名成員", step: 2, expectedMemberCount: 12 },
+    );
+    assert.equal(firstResponse.statusCode, 200, firstResponse.body);
+    const first = json(firstResponse);
+    assert.equal(first.expectedMemberCount, 2);
+    assert.equal(first.membersLocked, false);
+
+    const second = await joinRoom(code, "u2", "同名成員");
+    assert.equal(second.membersLocked, true);
+    assert.deepEqual(second.members.map((member) => member.memberId), ["u1", "u2"]);
+
+    const full = await post(`/api/rooms/${code}/join`, { memberId: "u3", name: "同名成員", step: 2 });
+    assert.equal(full.statusCode, 409);
+    assert.equal(json(full).error, "room_full_or_locked");
+
+    const takeover = await post(
+      `/api/rooms/${code}/join`,
+      { memberId: "u1", name: "同名成員", step: 2 },
+      auth(second.token),
+    );
+    assert.equal(takeover.statusCode, 409);
+    assert.equal(json(takeover).error, "member_id_in_use");
+
+    const reconnectedFirst = await joinRoom(code, "u1", "同名成員", 2, auth(first.token));
+    const reconnectedSecond = await joinRoom(code, "u2", "同名成員", 2, auth(second.token));
+    assert.equal(reconnectedFirst.membersLocked, true);
+    assert.equal(reconnectedSecond.membersLocked, true);
+    assert.deepEqual(reconnectedSecond.members.map((member) => member.memberId), ["u1", "u2"]);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(reconnectedFirst.token)));
+    assert.equal(hydrated.expectedMemberCount, 2);
+    assert.equal(hydrated.membersLocked, true);
+    assert.deepEqual(hydrated.members.map((member) => member.memberId), ["u1", "u2"]);
+  });
+
+  test("one member advancing does not drag another member past an unfinished step", async () => {
+    const created = json(await post("/api/rooms", { expectedMemberCount: 2 }));
+    const first = await joinRoom(created.room, "u1", "小安", 2);
+    const second = await joinRoom(created.room, "u2", "小美", 2);
+
+    const firstWrite = await post(
+      `/api/rooms/${created.room}/state`,
+      { baseRevision: 0, step: 3, snapshot: snapshot() },
+      auth(first.token),
+    );
+    assert.equal(firstWrite.statusCode, 200, firstWrite.body);
+    const revision = json(firstWrite).revision;
+
+    const firstState = json(await get(`/api/rooms/${created.room}/state`, auth(first.token)));
+    const secondState = json(await get(`/api/rooms/${created.room}/state`, auth(second.token)));
+    assert.equal(firstState.currentStep, 3);
+    assert.equal(secondState.currentStep, 2);
+
+    const secondWrite = await post(
+      `/api/rooms/${created.room}/state`,
+      { baseRevision: revision, step: 3, snapshot: snapshot() },
+      auth(second.token),
+    );
+    assert.equal(secondWrite.statusCode, 200, secondWrite.body);
+    assert.equal(json(await get(`/api/rooms/${created.room}/state`, auth(second.token))).currentStep, 3);
+  });
+
+  test("member colours are valid for new and pre-colour rooms", async () => {
+    const code = await newRoom();
+    const first = await joinRoom(code, "u1", "小安");
+    await joinRoom(code, "u2", "小美");
+    await pool.query(
+      `update members set color = ''
+        where room_id = (select id from rooms where code = $1) and member_id = 'u1'`,
+      [code],
+    );
+
+    const state = json(await get(`/api/rooms/${code}/state`, auth(first.token)));
+    assert.equal(state.snapshot.sources.length, 2);
+    for (const source of state.snapshot.sources) assert.match(source.color, /^#[0-9A-Fa-f]{6}$/);
   });
 
   test("a code is accepted however it is typed", async () => {
@@ -441,7 +549,84 @@ if (!databaseUrl) {
     assert.deepEqual(rows.rows.map((r) => r.member_id), ["u1"]);
   });
 
-  test("a deleted card disappears from the projection too", async () => {
+  test("cards and votes merge monotonically instead of treating absence as deletion", async () => {
+    const code = await newRoom();
+    const a = await joinRoom(code, "u1", "小安");
+    const b = await joinRoom(code, "u2", "阿凱");
+    const sources = [
+      { id: "u1", name: "小安", color: "#276EF1", system: false, joined: true },
+      { id: "u2", name: "阿凱", color: "#5B8C00", system: false, joined: true },
+      { id: "group", name: "小組提出", color: "#46515f", system: true, joined: true },
+    ];
+    const item = (id, text, createdBy, contentVersion) => ({ id, text, createdBy, contentVersion });
+    const ballot = (value, round, contentVersion) => ({ value, round, contentVersion });
+    const write = async (session, baseRevision, state) => {
+      const response = await post(
+        `/api/rooms/${code}/state`,
+        { step: 3, baseRevision, snapshot: snapshot({ sources, ...state }) },
+        auth(session.token),
+      );
+      assert.equal(response.statusCode, 200, response.body);
+      return json(response).revision;
+    };
+
+    let revision = await write(a, 0, {
+      distresses: [item("d1", "小安的困擾", "u1", 1)],
+      groupingRound: 1,
+      groupingVotes: { u1: ballot("gp-a", 1, 1) },
+    });
+    revision = await write(b, revision, {
+      distresses: [item("d2", "阿凱的困擾", "u2", 1)],
+      groupingRound: 1,
+      groupingVotes: { u2: ballot("gp-b", 1, 1) },
+    });
+
+    const roomId = (await pool.query("select id from rooms where lower(code) = $1", [code])).rows[0].id;
+    const liveCards = async () => (await pool.query(
+      "select item_id, body from submissions where room_id = $1 and kind = 'distress' and deleted_at is null order by item_id",
+      [roomId],
+    )).rows;
+    const liveVotes = async () => (await pool.query(
+      "select member_id, value from votes where room_id = $1 and kind = 'grouping' and round = 1 and deleted_at is null order by member_id",
+      [roomId],
+    )).rows;
+    assert.deepEqual((await liveCards()).map((row) => row.item_id), ["d1", "d2"]);
+    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u1", "u2"]);
+
+    revision = await write(a, revision, {
+      distresses: [item("d1", "新版內容", "u1", 2)],
+      groupingRound: 1,
+      groupingVotes: { u1: ballot("gp-new", 1, 2) },
+    });
+    revision = await write(b, revision, {
+      distresses: [item("d1", "同版不得覆蓋", "u1", 2), item("d2", "阿凱的困擾", "u2", 1)],
+      groupingRound: 1,
+      groupingVotes: { u1: ballot("gp-equal", 1, 2), u2: ballot("gp-b", 1, 1) },
+    });
+    assert.equal((await liveCards()).find((row) => row.item_id === "d1").body, "新版內容");
+    assert.equal((await liveVotes()).find((row) => row.member_id === "u1").value, "gp-new");
+
+    revision = await write(a, revision, {
+      distresses: [item("d2", "阿凱的困擾", "u2", 1)],
+      deletedDistressIds: ["d1"],
+      distressesVersion: 3,
+      groupingRound: 1,
+      groupingVotes: { u2: ballot("gp-b", 1, 1) },
+      voteTombstones: [{ kind: "grouping", round: 1, memberId: "u1", deletedVersion: 3 }],
+    });
+    assert.deepEqual((await liveCards()).map((row) => row.item_id), ["d2"]);
+    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u2"]);
+
+    await write(b, revision, {
+      distresses: [item("d1", "舊資料不能復活", "u1", 2), item("d2", "阿凱的困擾", "u2", 1)],
+      groupingRound: 1,
+      groupingVotes: { u1: ballot("gp-revive", 1, 2), u2: ballot("gp-b", 1, 1) },
+    });
+    assert.deepEqual((await liveCards()).map((row) => row.item_id), ["d2"]);
+    assert.deepEqual((await liveVotes()).map((row) => row.member_id), ["u2"]);
+  });
+
+  test("a deleted card becomes an explicit tombstone", async () => {
     const code = await newRoom();
     const session = await joinRoom(code, "u1", "小安");
     await post(
@@ -451,8 +636,8 @@ if (!databaseUrl) {
         baseRevision: 0,
         snapshot: snapshot({
           distresses: [
-            { id: "d1", text: "一", createdBy: "u1" },
-            { id: "d2", text: "二", createdBy: "u1" },
+            { id: "d1", text: "一", createdBy: "u1", contentVersion: 1 },
+            { id: "d2", text: "二", createdBy: "u1", contentVersion: 1 },
           ],
         }),
       },
@@ -460,13 +645,67 @@ if (!databaseUrl) {
     );
     await post(
       `/api/rooms/${code}/state`,
-      { step: 2, baseRevision: 1, snapshot: snapshot({ distresses: [{ id: "d2", text: "二", createdBy: "u1" }] }) },
+      {
+        step: 2,
+        baseRevision: 1,
+        snapshot: snapshot({
+          distresses: [{ id: "d2", text: "二", createdBy: "u1", contentVersion: 1 }],
+          distressesVersion: 2,
+          deletedDistressIds: ["d1"],
+        }),
+      },
       auth(session.token),
     );
 
     const roomId = (await pool.query("select id from rooms where lower(code) = $1", [code])).rows[0].id;
-    const rows = await pool.query("select item_id from submissions where room_id = $1", [roomId]);
+    const rows = await pool.query("select item_id from submissions where room_id = $1 and deleted_at is null", [roomId]);
     assert.deepEqual(rows.rows.map((r) => r.item_id), ["d2"]);
+    assert.equal(
+      (await pool.query("select 1 from submissions where room_id = $1 and item_id = 'd1' and deleted_at is not null", [roomId])).rowCount,
+      1,
+    );
+  });
+
+  test("Step 5 supplements and Step 11 ideas keep explicit deletion tombstones", async () => {
+    const code = await newRoom();
+    const session = await joinRoom(code, "u1", "小安");
+    const first = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 11,
+        baseRevision: 0,
+        snapshot: snapshot({
+          problemDetails: [{ id: "pd1", text: "需要保留的補充", createdBy: "u1", contentVersion: 10 }],
+          problemDetailsVersion: 10,
+          goalIdeas: [{ id: "gi1", text: "需要保留的目標想法", createdBy: "u1", contentVersion: 10 }],
+          goalIdeasVersion: 10,
+        }),
+      },
+      auth(session.token),
+    );
+    assert.equal(first.statusCode, 200, first.body);
+    const removed = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 11,
+        baseRevision: json(first).revision,
+        snapshot: snapshot({
+          problemDetails: [],
+          problemDetailsVersion: 11,
+          deletedProblemDetailIds: ["pd1"],
+          goalIdeas: [],
+          goalIdeasVersion: 11,
+          deletedGoalIdeaIds: ["gi1"],
+        }),
+      },
+      auth(session.token),
+    );
+    assert.equal(removed.statusCode, 200, removed.body);
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(session.token)));
+    assert.deepEqual(hydrated.snapshot.problemDetails, []);
+    assert.deepEqual(hydrated.snapshot.goalIdeas, []);
+    assert.deepEqual(hydrated.snapshot.deletedProblemDetailIds, ["pd1"]);
+    assert.deepEqual(hydrated.snapshot.deletedGoalIdeaIds, ["gi1"]);
   });
 
   test("the exported artifact is stored against the room", async () => {
@@ -533,7 +772,7 @@ if (!databaseUrl) {
 
     const roomId = (await pool.query("select id from rooms where lower(code) = $1", [code])).rows[0].id;
     const rows = await pool.query("select item_id from submissions where room_id = $1", [roomId]);
-    assert.deepEqual(rows.rows.map((r) => r.item_id), ["d2"]);
+    assert.deepEqual(rows.rows.map((r) => r.item_id).sort(), ["d1", "d2"]);
   });
 
   test("the projection never blanks a display name it already has", async () => {
@@ -595,7 +834,7 @@ if (!databaseUrl) {
 
     // This is how the client tells "session expired" from "room deleted"
     // without the server ever having to say which.
-    const again = await joinRoom(code, "u1", "小安");
+    const again = await joinRoom(code, "u1", "小安", 2, auth(session.token));
     assert.notEqual(again.token, session.token);
     assert.equal((await get(`/api/rooms/${code}/state`, auth(again.token))).statusCode, 200);
   });
@@ -715,5 +954,85 @@ if (!databaseUrl) {
 
     // The room is gone, and the session that opened it goes with it.
     assert.equal((await get(`/api/rooms/${code}/state`, auth(session.token))).statusCode, 404);
+  });
+
+  test("authoritative hydrate survives closed clients and a fresh app instance", async () => {
+    const created = await post("/api/rooms", { expectedMemberCount: 2 });
+    assert.equal(created.statusCode, 201, created.body);
+    const code = json(created).room;
+    const firstMember = await joinRoom(code, "u1", "小安", 2);
+    const secondMember = await joinRoom(code, "u2", "小美", 2);
+    const sources = [
+      { id: "u1", name: "小安", color: "#276EF1", system: false, joined: true },
+      { id: "u2", name: "小美", color: "#E05A47", system: false, joined: true },
+      { id: "group", name: "小組提出", color: "#46515f", system: true, joined: true },
+    ];
+    const write = async (token, baseRevision, step, next) => {
+      const response = await post(
+        `/api/rooms/${code}/state`,
+        { baseRevision, step, snapshot: snapshot({ sources, ...next }) },
+        auth(token),
+      );
+      assert.equal(response.statusCode, 200, response.body);
+      return json(response).revision;
+    };
+
+    let revision = await write(firstMember.token, 0, 9, {
+      distresses: [{ id: "d1", text: "小安的困擾", createdBy: "u1", contentVersion: 1 }],
+      groupingRound: 1,
+      groupingVotes: { u1: { value: "g1", round: 1, contentVersion: 1 } },
+    });
+    revision = await write(secondMember.token, revision, 15, {
+      distresses: [
+        { id: "d1", text: "小安的困擾", createdBy: "u1", contentVersion: 1 },
+        { id: "d2", text: "小美的困擾", createdBy: "u2", contentVersion: 2 },
+      ],
+      causes: [{ id: "c1", text: "真正原因", createdBy: "u2", contentVersion: 2 }],
+      methods: [{ id: "m1", text: "可行方法", createdBy: "u2", contentVersion: 2 }],
+      groupingRound: 1,
+      groupingVotes: {
+        u1: { value: "g1", round: 1, contentVersion: 1 },
+        u2: { value: "g2", round: 1, contentVersion: 2 },
+      },
+    });
+    revision = await write(firstMember.token, revision, 15, {
+      distresses: [{ id: "d2", text: "小美的困擾", createdBy: "u2", contentVersion: 2 }],
+      causes: [{ id: "c1", text: "真正原因", createdBy: "u2", contentVersion: 2 }],
+      methods: [{ id: "m1", text: "可行方法", createdBy: "u2", contentVersion: 2 }],
+      deletedDistressIds: ["d1"],
+      distressesVersion: 3,
+      groupingRound: 1,
+      groupingVotes: { u2: { value: "g2", round: 1, contentVersion: 2 } },
+    });
+
+    const assertHydrated = (body) => {
+      assert.equal(body.expectedMemberCount, 2);
+      assert.equal(body.membersLocked, true);
+      assert.deepEqual(body.members.map((member) => member.memberId).sort(), ["u1", "u2"]);
+      assert.equal(body.currentStep, 15);
+      assert.deepEqual(body.snapshot.distresses.map((item) => item.id), ["d2"]);
+      assert.deepEqual(body.snapshot.causes.map((item) => item.id), ["c1"]);
+      assert.deepEqual(body.snapshot.methods.map((item) => item.id), ["m1"]);
+      assert.deepEqual(body.snapshot.deletedDistressIds, ["d1"]);
+      assert.deepEqual(Object.keys(body.snapshot.groupingVotes).sort(), ["u1", "u2"]);
+    };
+    assertHydrated(json(await get(`/api/rooms/${code}/state`, auth(firstMember.token))));
+
+    const restartedPool = createPool(config);
+    const restartedApp = await buildApp(config, restartedPool);
+    await restartedApp.ready();
+    try {
+      const reconnect = await restartedApp.inject({
+        method: "POST",
+        url: `/api/rooms/${code}/join`,
+        payload: { memberId: "u1", name: "小安", step: 2 },
+        headers: auth(firstMember.token),
+      });
+      assert.equal(reconnect.statusCode, 200, reconnect.body);
+      assertHydrated(json(reconnect));
+    } finally {
+      await restartedApp.close();
+      await restartedPool.end();
+    }
   });
 }

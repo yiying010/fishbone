@@ -128,4 +128,42 @@ export const migrations: Migration[] = [
         where session_token_hash is not null;
     `,
   },
+  {
+    id: "0003_room_membership_policy",
+    sql: /* sql */ `
+      alter table rooms
+        add column expected_member_count smallint,
+        add column members_locked boolean not null default false;
+
+      alter table rooms
+        add constraint rooms_expected_member_count_check
+          check (expected_member_count is null or expected_member_count between 1 and 12);
+    `,
+  },
+  {
+    id: "0004_authoritative_item_versions",
+    sql: /* sql */ `
+      -- Snapshot absence is not deletion. These versions let PostgreSQL keep
+      -- the newest explicit content or tombstone from each collaborating client.
+      alter table submissions
+        add column content_version bigint not null default 0,
+        add column deleted_at timestamptz,
+        add column deleted_version bigint not null default 0;
+
+      alter table votes
+        add column content_version bigint not null default 0,
+        add column deleted_at timestamptz,
+        add column deleted_version bigint not null default 0;
+
+      alter table vote_rounds
+        add column content_version bigint not null default 0;
+
+      create index submissions_live_room_kind_idx
+        on submissions (room_id, kind, item_id)
+        where deleted_at is null;
+      create index votes_live_room_kind_round_idx
+        on votes (room_id, kind, round, member_id)
+        where deleted_at is null and content_version >= deleted_version;
+    `,
+  },
 ];

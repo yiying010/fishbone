@@ -47,6 +47,15 @@ export function displayName(value: unknown): string {
   return typeof value === "string" ? withoutNul(value).trim().slice(0, MAX_DISPLAY_NAME) : "";
 }
 
+export function expectedMemberCount(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 12) {
+    throw new RoomCodeError("expectedMemberCount must be between 1 and 12");
+  }
+  return parsed;
+}
+
 export function bearerToken(request: FastifyRequest): string {
   const header = request.headers["authorization"];
   return typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7).trim() : "";

@@ -19,6 +19,7 @@
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           if(data.unchanged){
+            if(applyRoomPolicy(data)&&!imeComposing&&!activeDraftControl())render();
             /* The server may be configured not to hold the request at all
                (SYNC_LONG_POLL_MS=0), in which case this answers immediately and
                an unpaced loop would hammer a full snapshot read per iteration. */
@@ -29,9 +30,9 @@
              the revision past what this response carries. Applying the older
              snapshot would only cause a needless conflict on the next push. */
           if((data.revision||0)<SYNC.revision)continue;
-          SYNC.revision=data.revision||0;
+          applyRoomPolicy(data);SYNC.revision=data.revision||0;
           SYNC.serverJson=canonJson(data.snapshot||{});
-          applyRemote(data.snapshot);
+          applyRemote(data.snapshot,data.currentStep);
           schedulePush();
         }catch(e){
           if(SYNC.session!==session)return;
@@ -57,13 +58,14 @@
             throw new Error("HTTP 404");
           }
           if(res.status===429){let wait=retryAfterMs(res);setSyncStatus(false,"伺服器暫時限制了請求，"+Math.round(wait/1000)+" 秒後自動再試。");setTimeout(schedulePush,wait);return}
-          if(res.status===409){let other=await res.json();SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot);continue}
+          if(res.status===409){let other=await res.json();applyRoomPolicy(other);SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot,other.currentStep);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
           /* Only move forward: a poll running in parallel may already have seen
              a later revision, and rewinding would strand serverJson on an older
              snapshot. */
           if((data.revision||0)>SYNC.revision){SYNC.revision=data.revision||0;SYNC.serverJson=json}
+          applyRoomPolicy(data);let acceptedStep=Number(data.currentStep);if(Number.isFinite(acceptedStep)&&!S.reviewingStep)S.step=Math.max(S.step,Math.min(19,Math.trunc(acceptedStep)));
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           return;
@@ -85,8 +87,8 @@
         let res=await fetch(roomApi("state"),{cache:"no-store",headers:syncHeaders(false)});
         if(!res.ok)return;
         let data=await res.json();
-        SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
-        applyRemote(data.snapshot);schedulePush();
+        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
+        applyRemote(data.snapshot,data.currentStep);schedulePush();
       }catch(e){}
     }
     function saveArtifact(format,filename,content){

@@ -12,7 +12,9 @@ import {
 import { registerAdminRoomRoutes } from "./admin-rooms.ts";
 import {
   authenticateRoom,
+  bearerToken,
   displayName,
+  expectedMemberCount,
   gateRoomRequest,
   rateLimited,
   requestBody,
@@ -40,9 +42,19 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
     const creates = limiters.roomCreates?.take(request.ip);
     if (creates && !creates.allowed) return rateLimited(reply, creates.retryAfterSeconds);
 
-    const code = await store.createRoom(config.roomCodeLength);
+    const payload = requestBody(request);
+    const created = await store.createRoom(
+      config.roomCodeLength,
+      expectedMemberCount(payload["expectedMemberCount"]),
+    );
     reply.code(201).header("cache-control", "no-store");
-    return { room: code, displayCode: formatRoomCode(code) };
+    return {
+      room: created.code,
+      displayCode: formatRoomCode(created.code),
+      expectedMemberCount: created.expectedMemberCount,
+      membersLocked: created.membersLocked,
+      members: [],
+    };
   });
 
   app.post("/api/rooms/:code/join", async (request, reply) => {
@@ -59,6 +71,7 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
       displayName(payload["name"]),
       roomStep(payload["step"]),
       config.sessionTtlHours,
+      bearerToken(request),
     );
     if (joined === null) return roomNotFound(request, reply, limiters);
 
@@ -93,20 +106,41 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
 
     const first = await store.read(roomCode);
     if (first === null) return roomNotFound(request, reply, limiters);
+    const memberStep = first.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? first.currentStep;
     if (!hasSince || first.revision !== since) {
-      return { room: roomCode, ...first };
+      return { room: roomCode, ...first, currentStep: memberStep };
     }
     if (!wantsHold) {
-      return { room: roomCode, revision: first.revision, currentStep: first.currentStep, unchanged: true };
+      return {
+        room: roomCode,
+        revision: first.revision,
+        currentStep: memberStep,
+        expectedMemberCount: first.expectedMemberCount,
+        membersLocked: first.membersLocked,
+        members: first.members,
+        unchanged: true,
+      };
     }
 
     const changed = await holdUntilRoomChanges(request, roomCode, since, deps);
     if (!changed) {
-      return { room: roomCode, revision: since, currentStep: first.currentStep, unchanged: true };
+      return {
+        room: roomCode,
+        revision: since,
+        currentStep: memberStep,
+        expectedMemberCount: first.expectedMemberCount,
+        membersLocked: first.membersLocked,
+        members: first.members,
+        unchanged: true,
+      };
     }
     const latest = await store.read(roomCode);
     if (latest === null) return roomNotFound(request, reply, limiters);
-    return { room: roomCode, ...latest };
+    return {
+      room: roomCode,
+      ...latest,
+      currentStep: latest.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? latest.currentStep,
+    };
   });
 
   app.post("/api/rooms/:code/state", async (request, reply) => {

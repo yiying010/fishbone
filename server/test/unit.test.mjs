@@ -465,10 +465,10 @@ test("both ballot shapes are read, and a stale round is kept as its own round", 
   assert.deepEqual(
     votes.sort((a, b) => a.memberId.localeCompare(b.memberId)),
     [
-      { memberId: "u1", value: "gp-1", round: 3 },
-      { memberId: "u2", value: "gp-2", round: 2 },
+      { memberId: "u1", value: "gp-1", round: 3, contentVersion: 0 },
+      { memberId: "u2", value: "gp-2", round: 2, contentVersion: 0 },
       // a bare value belongs to the map's current round
-      { memberId: "u3", value: "gp-1", round: 3 },
+      { memberId: "u3", value: "gp-1", round: 3, contentVersion: 0 },
     ],
   );
 });

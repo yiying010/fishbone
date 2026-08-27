@@ -1,25 +1,41 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { projectSnapshot } from "../domain/projection.ts";
 import type { Snapshot } from "../domain/snapshot.ts";
-import { withTransaction, type Pool } from "../db/pool.ts";
+import { withTransaction, type Pool, type PoolClient } from "../db/pool.ts";
 import { AdminRoomRepository } from "./admin-repository.ts";
 import { ArtifactRepository, type ArtifactInput } from "./artifact-repository.ts";
 import { generateRoomCode } from "./codes.ts";
-import { RoomNotFoundError } from "./errors.ts";
+import { MemberIdentityError, RoomCapacityError, RoomNotFoundError } from "./errors.ts";
 import { RetentionRepository } from "./retention-repository.ts";
+import { buildAuthoritativeSnapshot } from "./authoritative-snapshot.ts";
 
-export { RoomCodeError, RoomNotFoundError } from "./errors.ts";
+export {
+  MemberIdentityError,
+  RoomCapacityError,
+  RoomCodeError,
+  RoomNotFoundError,
+} from "./errors.ts";
 export { normalizeMemberId } from "./member-id.ts";
 
 export interface RoomState {
   revision: number;
   snapshot: Snapshot;
   currentStep: number;
+  expectedMemberCount: number | null;
+  membersLocked: boolean;
+  members: RoomMember[];
+}
+
+export interface RoomMember {
+  memberId: string;
+  displayName: string;
+  currentStep: number;
 }
 
 export interface WriteAccepted {
   status: "accepted";
   revision: number;
+  currentStep: number;
 }
 
 export interface WriteConflict {
@@ -27,6 +43,9 @@ export interface WriteConflict {
   revision: number;
   snapshot: Snapshot;
   currentStep: number;
+  expectedMemberCount: number | null;
+  membersLocked: boolean;
+  members: RoomMember[];
 }
 
 export type WriteResult = WriteAccepted | WriteConflict;
@@ -36,6 +55,8 @@ interface RoomRow {
   revision: number;
   snapshot: Snapshot;
   current_step: number;
+  expected_member_count: number | null;
+  members_locked: boolean;
 }
 
 export interface JoinResult extends RoomState {
@@ -54,6 +75,30 @@ export interface AuthenticatedMember {
  */
 function hashToken(token: string): Buffer {
   return createHash("sha256").update(token, "utf8").digest();
+}
+
+const MEMBER_COLORS = ["#276EF1", "#00A676", "#D95D39", "#7B61FF", "#B7791F", "#008C95"] as const;
+
+const DURABLE_REVISION_FIELDS = [
+  "revisionMode",
+  "revisionTarget",
+  "revisionReturnChain",
+  "revisionChainIndex",
+  "revisionFromStep",
+  "revisionRoundId",
+  "revisionCompletedRound",
+  "revisionTransitionVersion",
+  "revisionCheckpointGenerations",
+  "revisionCheckpointConfirmations",
+] as const;
+
+/** Older clients may omit revision-chain fields; omission must not erase them. */
+function preserveDurableRevisionFields(previous: Snapshot, submitted: Snapshot): Snapshot {
+  const merged: Snapshot = { ...submitted };
+  for (const field of DURABLE_REVISION_FIELDS) {
+    if (!(field in merged) && field in previous) merged[field] = previous[field];
+  }
+  return merged;
 }
 
 export class RoomStore {
@@ -79,16 +124,21 @@ export class RoomStore {
    * a guessed code cannot bring a room into existence, and every code that
    * exists came from a CSPRNG rather than from someone naming their class.
    */
-  async createRoom(codeLength: number): Promise<string> {
+  async createRoom(
+    codeLength: number,
+    expectedMemberCount: number | null,
+  ): Promise<{ code: string; expectedMemberCount: number | null; membersLocked: boolean }> {
     // A collision at 50 bits is not a thing that happens, but the unique index
     // is the authority, not that assumption.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = generateRoomCode(codeLength);
       const { rowCount } = await this.pool.query(
-        `insert into rooms (code) values ($1) on conflict (lower(code)) do nothing`,
-        [code],
+        `insert into rooms (code, expected_member_count)
+         values ($1, $2)
+         on conflict (lower(code)) do nothing`,
+        [code, expectedMemberCount],
       );
-      if ((rowCount ?? 0) > 0) return code;
+      if ((rowCount ?? 0) > 0) return { code, expectedMemberCount, membersLocked: false };
     }
     throw new Error("could not allocate an unused room code");
   }
@@ -104,22 +154,63 @@ export class RoomStore {
     displayName: string,
     step: number,
     sessionTtlHours: number,
+    previousToken: string,
   ): Promise<JoinResult | null> {
     return withTransaction(this.pool, async (client) => {
       const { rows } = await client.query<RoomRow>(
         `update rooms set last_activity_at = now()
           where lower(code) = lower($1)
-          returning id, revision, snapshot, current_step`,
+          returning id, revision, snapshot, current_step, expected_member_count, members_locked`,
         [code],
       );
       const room = rows[0];
       if (room === undefined) return null;
 
+      const existing = await client.query<{ session_token_hash: Buffer | null }>(
+        `select session_token_hash
+           from members
+          where room_id = $1 and member_id = $2
+          for update`,
+        [room.id, memberId],
+      );
+      const existingHash = existing.rows[0]?.session_token_hash;
+      let newMemberOrdinal = 0;
+      if (existingHash !== undefined) {
+        const candidate = hashToken(previousToken);
+        if (previousToken === "" || existingHash === null || !timingSafeEqual(existingHash, candidate)) {
+          throw new MemberIdentityError("member id is already owned by another session");
+        }
+      }
+
+      if (existingHash === undefined) {
+        if (room.members_locked) throw new RoomCapacityError("room membership is locked");
+        if (room.expected_member_count !== null) {
+          const count = await client.query<{ count: string }>(
+            `select count(*)::text as count
+               from members
+              where room_id = $1 and not is_system`,
+            [room.id],
+          );
+          newMemberOrdinal = Number(count.rows[0]?.count ?? 0);
+          if (newMemberOrdinal >= room.expected_member_count) {
+            throw new RoomCapacityError("room is full");
+          }
+        } else {
+          const count = await client.query<{ count: string }>(
+            `select count(*)::text as count
+               from members
+              where room_id = $1 and not is_system`,
+            [room.id],
+          );
+          newMemberOrdinal = Number(count.rows[0]?.count ?? 0);
+        }
+      }
+
       const token = randomBytes(32).toString("base64url");
       await client.query(
-        `insert into members (room_id, member_id, display_name, has_joined, current_step,
+        `insert into members (room_id, member_id, display_name, color, has_joined, current_step,
                               session_token_hash, session_expires_at)
-         values ($1, $2, $3, true, $4, $5, now() + make_interval(hours => $6::int))
+         values ($1, $2, $3, $7, true, $4, $5, now() + make_interval(hours => $6::int))
          on conflict (room_id, member_id) do update
            set display_name = case when excluded.display_name = '' then members.display_name
                                    else excluded.display_name end,
@@ -128,14 +219,35 @@ export class RoomStore {
                last_seen_at       = now(),
                session_token_hash = excluded.session_token_hash,
                session_expires_at = excluded.session_expires_at`,
-        [room.id, memberId, displayName, step, hashToken(token), sessionTtlHours],
+        [
+          room.id,
+          memberId,
+          displayName,
+          step,
+          hashToken(token),
+          sessionTtlHours,
+          MEMBER_COLORS[newMemberOrdinal % MEMBER_COLORS.length],
+        ],
       );
 
+      if (room.expected_member_count !== null) {
+        const count = await client.query<{ count: string }>(
+          `select count(*)::text as count
+             from members
+            where room_id = $1 and not is_system`,
+          [room.id],
+        );
+        if (Number(count.rows[0]?.count ?? 0) >= room.expected_member_count) {
+          await client.query(`update rooms set members_locked = true where id = $1`, [room.id]);
+          room.members_locked = true;
+        }
+      }
+
+      const state = await this.roomState(client, room);
       return {
         token,
-        revision: room.revision,
-        snapshot: room.snapshot ?? {},
-        currentStep: room.current_step,
+        ...state,
+        currentStep: state.members.find((member) => member.memberId === memberId)?.currentStep ?? state.currentStep,
       };
     });
   }
@@ -167,13 +279,38 @@ export class RoomStore {
 
   async read(code: string): Promise<RoomState | null> {
     const { rows } = await this.pool.query<RoomRow>(
-      `select id, revision, snapshot, current_step from rooms where lower(code) = lower($1)`,
+      `select id, revision, snapshot, current_step, expected_member_count, members_locked
+         from rooms where lower(code) = lower($1)`,
       [code],
     );
     const room = rows[0];
-    return room === undefined
-      ? null
-      : { revision: room.revision, snapshot: room.snapshot ?? {}, currentStep: room.current_step };
+    return room === undefined ? null : this.roomState(this.pool, room);
+  }
+
+  private async roomState(db: Pool | PoolClient, room: RoomRow): Promise<RoomState> {
+    return {
+      revision: room.revision,
+      snapshot: await buildAuthoritativeSnapshot(db, room.id, room.snapshot),
+      currentStep: room.current_step,
+      expectedMemberCount: room.expected_member_count,
+      membersLocked: room.members_locked,
+      members: await this.membersForRoom(db, room.id),
+    };
+  }
+
+  private async membersForRoom(db: Pool | PoolClient, roomId: number): Promise<RoomMember[]> {
+    const { rows } = await db.query<{ member_id: string; display_name: string; current_step: number }>(
+      `select member_id, display_name, current_step
+         from members
+        where room_id = $1 and not is_system
+        order by first_seen_at, member_id`,
+      [roomId],
+    );
+    return rows.map((member) => ({
+      memberId: member.member_id,
+      displayName: member.display_name,
+      currentStep: member.current_step,
+    }));
   }
 
   /**
@@ -226,7 +363,7 @@ export class RoomStore {
       // Row lock: serialises concurrent writers to the same room so the
       // compare-and-set below cannot be read-modify-written out from under us.
       const { rows } = await client.query<RoomRow>(
-        `select id, revision, snapshot, current_step from rooms
+        `select id, revision, snapshot, current_step, expected_member_count, members_locked from rooms
           where lower(code) = lower($1) for update`,
         [code],
       );
@@ -236,11 +373,15 @@ export class RoomStore {
       }
 
       if (room.revision !== baseRevision) {
+        const members = await this.membersForRoom(client, room.id);
         return {
           status: "conflict",
           revision: room.revision,
-          snapshot: room.snapshot ?? {},
-          currentStep: room.current_step,
+          snapshot: await buildAuthoritativeSnapshot(client, room.id, room.snapshot),
+          currentStep: members.find((member) => member.memberId === memberId)?.currentStep ?? room.current_step,
+          expectedMemberCount: room.expected_member_count,
+          membersLocked: room.members_locked,
+          members,
         };
       }
 
@@ -252,14 +393,24 @@ export class RoomStore {
                 last_activity_at = now()
           where id = $1
           returning revision`,
-        [room.id, JSON.stringify(snapshot)],
+        [room.id, JSON.stringify(preserveDurableRevisionFields(room.snapshot ?? {}, snapshot))],
       );
       const revision = updated[0]?.revision;
       if (revision === undefined) throw new Error("room update returned no row");
 
       await projectSnapshot(client, snapshot, { roomId: room.id, memberId, step });
 
-      return { status: "accepted", revision };
+      const { rows: progressRows } = await client.query<{ current_step: number }>(
+        `select coalesce(
+                  (select current_step from members where room_id = $1 and member_id = $2),
+                  (select current_step from rooms where id = $1)
+                ) as current_step`,
+        [room.id, memberId],
+      );
+      const currentStep = progressRows[0]?.current_step;
+      if (currentStep === undefined) throw new Error("room progress disappeared during write");
+
+      return { status: "accepted", revision, currentStep };
     });
   }
 

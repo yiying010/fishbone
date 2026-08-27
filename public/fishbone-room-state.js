@@ -11,21 +11,47 @@
     const sharedSnapshotOutcomeBase=sharedSnapshot;sharedSnapshot=function(){let data=sharedSnapshotOutcomeBase();data.outcomeRevisionVotes=plain(S.outcomeRevisionVotes||{});data.outcomeRevisionRound=S.outcomeRevisionRound||1;data.outcomeRevisionVersion=S.outcomeRevisionVersion||0;data.outcomeRevisionTarget=S.outcomeRevisionTarget||"";data.outcomeRevisionTargetRound=S.outcomeRevisionTargetRound||0;return data}
     const mergeRoomKeepMethodDraftLocal=mergeRoom;mergeRoom=function(data){if(data){data={...data};delete data.draftMethodCats;delete data.draftMethodAssignments}return mergeRoomKeepMethodDraftLocal(data)}
     const mergeRoomOutcomeRevisionBase=mergeRoom;mergeRoom=function(data){mergeRoomOutcomeRevisionBase(data);if(!data)return;let remoteRound=data.outcomeRevisionRound||1,remoteVersion=data.outcomeRevisionVersion||0,remoteTarget=String(data.outcomeRevisionTarget||""),remoteTargetRound=data.outcomeRevisionTargetRound||0;if(remoteRound>(S.outcomeRevisionRound||1)){S.outcomeRevisionRound=remoteRound;S.outcomeRevisionVotes=data.outcomeRevisionVotes||{};S.outcomeRevisionTarget="";S.outcomeRevisionTargetRound=0}else if(data.outcomeRevisionVotes&&remoteRound===(S.outcomeRevisionRound||1))S.outcomeRevisionVotes=mergeVotes(S.outcomeRevisionVotes||{},data.outcomeRevisionVotes);if(remoteVersion>(S.outcomeRevisionVersion||0)){S.outcomeRevisionVersion=remoteVersion;S.outcomeRevisionVotes=data.outcomeRevisionVotes||S.outcomeRevisionVotes||{}}if(remoteTarget&&remoteTargetRound&&(remoteTargetRound>=(S.outcomeRevisionTargetRound||0))){S.outcomeRevisionTarget=remoteTarget;S.outcomeRevisionTargetRound=remoteTargetRound;applyOutcomeRevisionTarget(remoteTarget,remoteTargetRound)}}
-    function loadRoom(room){try{let raw=localStorage.getItem(roomKey(room));if(raw)mergeRoom(JSON.parse(raw))}catch(e){}}
-    function saveRoom(){if(!S.joined||syncMuted)return;try{let data=sharedSnapshot();localStorage.setItem(roomKey(),JSON.stringify(data));if(roomChannel)roomChannel.postMessage({room:S.roomCode,from:S.selfId,data,kind:"update"})}catch(e){}schedulePush()}
-    function requestRoomSync(){if(roomChannel&&S.joined)roomChannel.postMessage({room:S.roomCode,from:S.selfId,kind:"sync-request"});refreshFromServer()}
-    function autoAdvanceFromShared(){if(S.step===3&&S.groupingConfirmed&&S.reviewingStep!==3)S.step=4;if(S.step===4&&S.confirmBy.selected&&S.reviewingStep!==4)S.step=5;if(S.step===5&&S.problemOk&&S.reviewingStep!==5)S.step=6;if(S.step===8&&causeHandlingDone().ok&&S.reviewingStep!==8)S.step=9;if(S.step===9&&S.causeClassConfirmed&&S.reviewingStep!==9)S.step=10;if(S.step===10&&S.rightNeedsRevision&&S.reviewingStep!==10)S.step=9;if(S.step===10&&S.rightOk&&S.reviewingStep!==10)S.step=11;if(S.step===11&&S.goal&&S.confirmBy.goal&&S.reviewingStep!==11)S.step=12;if(S.step===14&&methodCheckDone().ok&&S.reviewingStep!==14)S.step=15;if(S.step===15&&S.methodClassConfirmed&&formalMethods().length&&S.reviewingStep!==15)S.step=16;if(S.step===16&&S.outcomeOk&&S.reviewingStep!==16)S.step=17;if(S.step===17&&S.feasible&&S.unique&&S.reviewingStep!==17)S.step=18;if(S.step===18&&S.reflectionSummaryOk&&S.reviewingStep!==18)S.step=19}
-    function receiveRoom(room,from,data,kind){if(!S.joined||room!==S.roomCode||from===S.selfId)return;if(kind==="sync-request"){if(roomChannel)roomChannel.postMessage({room:S.roomCode,from:S.selfId,data:sharedSnapshot(),kind:"sync-reply",to:from});return}syncMuted=true;if(data)mergeRoom(data);else loadRoom(room);autoAdvanceFromShared();render();syncMuted=false;if(data&&kind!=="sync-reply"&&from!=="storage"&&roomChannel)roomChannel.postMessage({room:S.roomCode,from:S.selfId,data:sharedSnapshot(),kind:"sync-reply",to:from})}
-    if(roomChannel)roomChannel.onmessage=e=>{let m=e.data||{};if(m.to&&m.to!==S.selfId)return;receiveRoom(m.room,m.from,m.data,m.kind)};
-    window.addEventListener("storage",e=>{if(e.key===roomKey()&&e.newValue){try{receiveRoom(S.roomCode,"storage",JSON.parse(e.newValue))}catch(err){receiveRoom(S.roomCode,"storage")}}});
-    /* ---- cross-device room sync ----------------------------------------------
-       BroadcastChannel and localStorage above stay in place: they make other tabs
-       in the same browser update instantly and keep a local copy if the network
-       drops. Everything below carries the same snapshot to other devices through
-       the server, reusing mergeRoom() rather than a second merge implementation.
-
-       The server holds one snapshot per room plus a revision. A write is a
-       compare-and-set on that revision: HTTP 409 means somebody else wrote first,
-       so the reply carries their snapshot, this client merges it and posts again.
-       That is what keeps two devices editing at once from losing each other's
-       cards without any merge logic living on the server. */
+    /* Revision checkpoints and reflections are formal cross-device state. They
+       use monotonic generations/versions so an equal or stale browser snapshot
+       cannot undo a later confirmation, deletion or edited reflection. */
+    const sharedSnapshotRevisionBase=sharedSnapshot;sharedSnapshot=function(){let data=sharedSnapshotRevisionBase();["revisionMode","revisionTarget","revisionReturnChain","revisionChainIndex","revisionFromStep","revisionRoundId","revisionCompletedRound","revisionTransitionVersion","revisionCheckpointGenerations","revisionCheckpointConfirmations"].forEach(k=>{if(S[k]!==undefined)data[k]=plain(S[k])});return data}
+    function mergeGenerationMap(local={},remote={}){let out={...(local||{})};Object.keys(remote||{}).forEach(k=>out[k]=Math.max(Number(out[k]||0),Number(remote[k]||0)));return out}
+    function mergeConfirmationMap(local={},remote={}){let out=plain(local||{});Object.keys(remote||{}).forEach(key=>{let members={...(out[key]||{})};Object.keys(remote[key]||{}).forEach(member=>members[member]=Math.max(Number(members[member]||0),Number(remote[key][member]||0)));out[key]=members});return out}
+    function reflectionMergeKey(r){return String((r||{}).source||(r||{}).createdBy||(r||{}).id||"")}
+    function reflectionMergeVersion(r){return Math.max(Number((r||{}).contentVersion||0),Number((r||{}).version||0),Number((r||{}).updatedAt||0),Number((r||{}).deletedAt||0))}
+    function mergeReflectionRecords(local=[],remote=[]){let out=new Map();[...(local||[]),...(remote||[])].forEach(r=>{let key=reflectionMergeKey(r);if(!key)return;let old=out.get(key);if(!old||reflectionMergeVersion(r)>reflectionMergeVersion(old)||reflectionMergeVersion(r)===reflectionMergeVersion(old)&&Number(r.deletedAt||0)>Number(old.deletedAt||0))out.set(key,{...(old||{}),...r})});return [...out.values()]}
+    const mergeRoomAuthoritativeMetaBase=mergeRoom;mergeRoom=function(data){let beforeReflections=plain(S.reflections||[]),beforeTransition=Number(S.revisionTransitionVersion||0);mergeRoomAuthoritativeMetaBase(data);if(!data)return;S.reflections=mergeReflectionRecords(beforeReflections,data.reflections||[]);S.reflectionsVersion=Math.max(Number(S.reflectionsVersion||0),Number(data.reflectionsVersion||0),...S.reflections.map(reflectionMergeVersion));let remoteTransition=Number(data.revisionTransitionVersion||0);if(remoteTransition>beforeTransition){["revisionMode","revisionTarget","revisionReturnChain","revisionChainIndex","revisionFromStep","revisionRoundId","revisionCompletedRound","revisionTransitionVersion"].forEach(k=>{if(data[k]!==undefined)S[k]=plain(data[k])})}S.revisionCheckpointGenerations=mergeGenerationMap(S.revisionCheckpointGenerations,data.revisionCheckpointGenerations);S.revisionCheckpointConfirmations=mergeConfirmationMap(S.revisionCheckpointConfirmations,data.revisionCheckpointConfirmations);if(typeof finalizeReflectionsFromState==="function")finalizeReflectionsFromState()}
+    const sharedSnapshotDraftTombstoneBase=sharedSnapshot;sharedSnapshot=function(){let data=sharedSnapshotDraftTombstoneBase();data.deletedProblemDetailIds=plain(S.deletedProblemDetailIds||[]);data.deletedGoalIdeaIds=plain(S.deletedGoalIdeaIds||[]);return data}
+    const mergeRoomDraftTombstoneBase=mergeRoom;mergeRoom=function(data){mergeRoomDraftTombstoneBase(data);if(!data)return;S.deletedProblemDetailIds=unionIds(S.deletedProblemDetailIds||[],data.deletedProblemDetailIds||[]);S.deletedGoalIdeaIds=unionIds(S.deletedGoalIdeaIds||[],data.deletedGoalIdeaIds||[]);S.problemDetails=(S.problemDetails||[]).filter(item=>!S.deletedProblemDetailIds.includes(item.id));S.goalIdeas=(S.goalIdeas||[]).filter(item=>!S.deletedGoalIdeaIds.includes(item.id))}
+    /* Old clients stored and broadcast a complete room snapshot in the browser.
+       That made a stale tab another room authority and let it overwrite newer
+       server state. Keep these names as no-op compatibility hooks; all shared
+       reads and writes now go through the authenticated room API. */
+    function loadRoom(room){}
+    function saveRoom(){if(!S.joined||syncMuted)return;schedulePush()}
+    function requestRoomSync(){refreshFromServer()}
+    /* One accepted server update may complete at most one screen transition.
+       Independent `if` statements used to cascade through several already-true
+       flags and visibly skip steps. */
+    function autoAdvanceFromShared(){
+      let step=S.step,next=step;
+      if(step===2&&distressSubmissionStatus().all&&S.reviewingStep!==2)next=3;
+      else if(step===3&&S.groupingConfirmed&&S.reviewingStep!==3)next=4;
+      else if(step===4&&S.confirmBy.selected&&S.reviewingStep!==4)next=5;
+      else if(step===5&&S.problemOk&&S.reviewingStep!==5)next=6;
+      else if(step===8&&causeHandlingDone().ok&&S.reviewingStep!==8)next=9;
+      else if(step===9&&S.causeClassConfirmed&&S.reviewingStep!==9)next=10;
+      else if(step===10&&S.rightNeedsRevision&&S.reviewingStep!==10)next=9;
+      else if(step===10&&S.rightOk&&S.reviewingStep!==10)next=11;
+      else if(step===11&&S.goal&&S.confirmBy.goal&&S.reviewingStep!==11)next=12;
+      else if(step===14&&methodCheckDone().ok&&S.reviewingStep!==14)next=15;
+      else if(step===15&&S.methodClassConfirmed&&formalMethods().length&&S.reviewingStep!==15)next=16;
+      else if(step===16&&S.outcomeOk&&S.reviewingStep!==16)next=17;
+      else if(step===17&&S.feasible&&S.unique&&S.reviewingStep!==17)next=18;
+      else if(step===18&&S.reflectionSummaryOk&&S.reviewingStep!==18)next=19;
+      S.step=next;
+    }
+    function receiveRoom(room,from,data,kind){}
+    /* ---- authenticated server room sync -------------------------------------
+       The server owns the persisted snapshot and revision. HTTP 409 returns its
+       latest snapshot, which this client merges before retrying. */

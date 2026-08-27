@@ -80,6 +80,7 @@
     document.addEventListener("pointerdown",e=>{
       let button=e.target&&e.target.closest?e.target.closest("button"):null,control=document.activeElement;
       if(!button||button.disabled||!isDraftControl(control)||control===button)return;
+      if(remotePaintPending)remoteDraftSnapshot=captureRemoteDraft()||remoteDraftSnapshot;
       pendingDraftButtonActivation={button,control,step:Number(S.step),id:button.id||"",action:button.getAttribute("onclick")||"",text:button.textContent||""};
       e.preventDefault();
     },true);

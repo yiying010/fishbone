@@ -94,8 +94,10 @@ if (!databaseUrl) {
     "fishbone-steps-solution.js",
     "fishbone-cards.js",
     "fishbone-methods.js",
+    "fishbone-revote.js",
     "fishbone-diagram-data.js",
     "fishbone-svg.js",
+    "fishbone-revision.js",
   ];
   const sources = await Promise.all(
     SCRIPTS.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")),
@@ -103,8 +105,10 @@ if (!databaseUrl) {
 
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
-    "requestAiReview", "sharedSnapshot", "canonJson", "loadRoomToken", "pushRoom",
-    "runMethodAiCheck",
+    "requestAiReview", "sharedSnapshot", "canonJson", "serverSnapshotJson", "loadRoomToken", "pushRoom",
+    "applyUnchangedRoomPolicy",
+    "runMethodAiCheck", "applyRemote", "renameDraftCat", "renameDraftMethodCat",
+    "submitCauseClass", "submitMethodClass",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -138,37 +142,66 @@ if (!databaseUrl) {
      * the student was actually shown.
      */
     const elements = new Map();
+    const listeners = new Map();
+    const queryResults = [];
     const element = () => new Proxy(
       { style: {}, classList: { add() {}, remove() {}, toggle() {} }, dataset: {},
-        textContent: "", innerHTML: "", className: "", value: undefined },
-      { get: (target, prop) => (prop in target ? target[prop] : () => {}) },
+        textContent: "", innerHTML: "", innerHTMLWrites: 0, className: "", value: undefined },
+      {
+        get: (target, prop) => (prop in target ? target[prop] : () => {}),
+        set: (target, prop, value) => {
+          if (prop === "innerHTML") target.innerHTMLWrites += 1;
+          target[prop] = value;
+          return true;
+        },
+      },
     );
     const byId = (id) => {
       if (!elements.has(id)) elements.set(id, element());
       return elements.get(id);
     };
+    const documentStub = {
+      activeElement: null,
+      getElementById: byId,
+      querySelector: () => element(),
+      querySelectorAll: () => queryResults,
+      addEventListener(type, handler) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(handler);
+      },
+      createElement: () => element(),
+      title: "",
+    };
+    const requests = [];
     const scope = {
       location: { protocol: "http:", pathname: "/fishbone.html", href: `${origin}/fishbone.html` },
       window: { addEventListener() {}, removeEventListener() {} },
-      document: {
-        getElementById: byId,
-        querySelector: () => element(),
-        querySelectorAll: () => [],
-        addEventListener() {},
-        createElement: () => element(),
-        title: "",
-      },
+      document: documentStub,
       navigator: { language: "zh-TW" },
       sessionStorage: store(sessionStore),
       localStorage: store(sharedLocal),
       // The scripts build a same-origin path from location.pathname; the test
       // server is on an ephemeral port, so resolve that path against it.
-      fetch: (url, init) => fetch(new URL(url, origin), init),
+      fetch: (url, init) => {
+        requests.push({ url: String(url), method: init?.method ?? "GET" });
+        return fetch(new URL(url, origin), init);
+      },
       alert() {},
       confirm: () => true,
     };
     const made = new Function(...Object.keys(scope), body)(...Object.values(scope));
-    const tab = { ...made, elements, shown: () => String(byId("gateMsg").innerHTML), sessionStore };
+    const tab = {
+      ...made,
+      document: documentStub,
+      elements,
+      queryResults,
+      requests,
+      fire(type, event) {
+        for (const handler of listeners.get(type) || []) handler(event);
+      },
+      shown: () => String(byId("gateMsg").innerHTML),
+      sessionStore,
+    };
     openTabs.push(tab);
     return tab;
   }
@@ -205,6 +238,72 @@ if (!databaseUrl) {
     assert.notEqual(reloaded.SYNC.token, tab.SYNC.token, "the session rotates on re-join");
   });
 
+  test("an unchanged authoritative snapshot issues no state POST", async () => {
+    const code = await newRoom();
+    const tab = openTab();
+    tab.S.roomCode = code;
+    tab.S.nameDraft = "小安";
+    tab.S.joined = true;
+
+    assert.equal(await tab.connectRoom(true), "ok");
+    if (tab.SYNC.pushTimer) clearTimeout(tab.SYNC.pushTimer);
+    tab.SYNC.pushTimer = null;
+
+    // The first upload gives PostgreSQL a complete browser-owned snapshot.
+    // Rejoining then exercises the authoritative hydrate path that previously
+    // added four server-only fields and defeated the no-op guard.
+    assert.equal(await tab.pushRoom(), true);
+    assert.equal(await tab.connectRoom(true), "ok");
+    if (tab.SYNC.pushTimer) clearTimeout(tab.SYNC.pushTimer);
+    tab.SYNC.pushTimer = null;
+    tab.requests.length = 0;
+
+    assert.equal(tab.canonJson(tab.sharedSnapshot()), tab.SYNC.serverJson);
+    assert.equal(await tab.pushRoom(), true);
+    assert.deepEqual(
+      tab.requests.filter((request) => request.method === "POST" && request.url.endsWith("/state")),
+      [],
+    );
+  });
+
+  test("a member join does not make idle tabs publish their server-owned sources", async () => {
+    const code = await newRoom();
+    const first = openTab();
+    first.S.roomCode = code;
+    first.S.nameDraft = "小安";
+    first.S.joined = true;
+    assert.equal(await first.connectRoom(true), "ok");
+    if (first.SYNC.pushTimer) clearTimeout(first.SYNC.pushTimer);
+    first.SYNC.pushTimer = null;
+    assert.equal(await first.pushRoom(), true);
+
+    const joined = openTab();
+    joined.S.roomCode = code;
+    joined.S.nameDraft = "小美";
+    joined.S.joined = true;
+    assert.equal(await joined.connectRoom(true), "ok");
+    if (joined.SYNC.pushTimer) clearTimeout(joined.SYNC.pushTimer);
+    joined.SYNC.pushTimer = null;
+
+    const response = await fetch(
+      new URL(`/api/rooms/${code}/state?since=${first.SYNC.revision}`, origin),
+      { headers: { authorization: `Bearer ${first.SYNC.token}` } },
+    );
+    const update = await response.json();
+    assert.equal(update.unchanged, true);
+    assert.equal(first.applyUnchangedRoomPolicy(update), true);
+    if (first.SYNC.pushTimer) clearTimeout(first.SYNC.pushTimer);
+    first.SYNC.pushTimer = null;
+    first.requests.length = 0;
+
+    assert.equal(first.canonJson(first.sharedSnapshot()), first.SYNC.serverJson);
+    assert.equal(await first.pushRoom(), true);
+    assert.deepEqual(
+      first.requests.filter((request) => request.method === "POST" && request.url.endsWith("/state")),
+      [],
+    );
+  });
+
   test("a second tab cannot take over a member id it does not hold the token for", async () => {
     const code = await newRoom();
     const owner = openTab();
@@ -230,6 +329,152 @@ if (!databaseUrl) {
     fresh.S.joined = true;
     assert.notEqual(fresh.S.selfId, owner.S.selfId);
     assert.equal(await fresh.connectRoom(true), "ok");
+  });
+
+  function activateStubbedMember(tab) {
+    tab.S.joined = true;
+    tab.S.active = tab.S.selfId;
+    tab.S.nameDraft = "測試成員";
+    const self = tab.S.sources.find((source) => source.id === tab.S.selfId);
+    self.name = tab.S.nameDraft;
+    self.joined = true;
+  }
+
+  async function submitFocusedClassificationName(kind, value) {
+    const tab = openTab();
+    activateStubbedMember(tab);
+    const cause = { id: "c1", text: "原因", createdBy: tab.S.selfId, status: "已確認為原因" };
+    tab.S.causes = [cause];
+
+    const isCause = kind === "cause";
+    const categoryId = isCause ? "dc1" : "dmc1";
+    const controlId = isCause ? `draft-cat-${categoryId}` : `draft-method-cat-${categoryId}`;
+    const action = isCause ? "submitCauseClass()" : "submitMethodClass()";
+    const buttonText = isCause ? "提交我的原因分類" : "提交我的方法分類";
+    tab.S.step = isCause ? 9 : 15;
+    if (isCause) {
+      tab.S.draftCats = [{ id: categoryId, name: "舊大要因" }];
+      tab.S.draftCauseAssignments = { c1: categoryId };
+    } else {
+      tab.S.methods = [{
+        id: "m1", text: "方法", createdBy: tab.S.selfId, status: "已完成對應檢查",
+        causes: ["c1"], effect: "能回應原因",
+      }];
+      tab.S.draftMethodCats = [{ id: categoryId, name: "舊大方法" }];
+      tab.S.draftMethodAssignments = { m1: categoryId };
+    }
+
+    const control = tab.document.getElementById(controlId);
+    Object.assign(control, {
+      id: controlId,
+      tagName: "INPUT",
+      type: "text",
+      value,
+      selectionStart: value.length,
+      selectionEnd: value.length,
+    });
+
+    let submitted = false;
+    let replacement;
+    const runSubmit = () => {
+      submitted = true;
+      if (isCause) tab.submitCauseClass();
+      else tab.submitMethodClass();
+    };
+    const makeButton = () => {
+      const button = {
+        disabled: false,
+        id: "",
+        isConnected: true,
+        textContent: buttonText,
+        click: runSubmit,
+        getAttribute: (name) => (name === "onclick" ? action : null),
+      };
+      button.closest = (selector) => (selector === "button" ? button : null);
+      return button;
+    };
+    const original = makeButton();
+    replacement = makeButton();
+    control.blur = () => {
+      tab.document.activeElement = null;
+      if (isCause) tab.renameDraftCat(categoryId, control.value);
+      else tab.renameDraftMethodCat(categoryId, control.value);
+      original.isConnected = false;
+    };
+    tab.queryResults.push(replacement);
+    tab.document.activeElement = control;
+
+    tab.fire("pointerdown", { target: original, preventDefault() {} });
+    tab.fire("click", {
+      target: original,
+      preventDefault() {},
+      stopImmediatePropagation() {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(submitted, true, `${kind} classification must submit on the first click`);
+    const proposals = isCause ? tab.S.causeClassProposals : tab.S.methodClassProposals;
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].groups[0].name, value);
+  }
+
+  test("Step 9 and Step 15 preserve English and numeric names on a direct submit click", async () => {
+    await submitFocusedClassificationName("cause", "RootCause789");
+    await submitFocusedClassificationName("method", "MethodGroup902");
+  });
+
+  async function classificationSelectSurvivesRemotePaint(kind) {
+    const tab = openTab();
+    activateStubbedMember(tab);
+    const isCause = kind === "cause";
+    const categoryId = isCause ? "dc1" : "dmc1";
+    const itemId = isCause ? "c1" : "m1";
+    const controlId = isCause ? `move-cause-${itemId}` : `move-method-${itemId}`;
+    tab.S.step = isCause ? 9 : 15;
+    if (isCause) {
+      tab.S.causes = [{ id: itemId, text: "原因", createdBy: tab.S.selfId, status: "已確認為原因" }];
+      tab.S.draftCats = [{ id: categoryId, name: "原因分類" }];
+      tab.S.draftCauseAssignments = { [itemId]: categoryId };
+    } else {
+      tab.S.causes = [{ id: "c1", text: "原因", createdBy: tab.S.selfId, status: "已確認為原因" }];
+      tab.S.methods = [{
+        id: itemId, text: "方法", createdBy: tab.S.selfId, status: "已完成對應檢查",
+        causes: ["c1"], effect: "能回應原因",
+      }];
+      tab.S.draftMethodCats = [{ id: categoryId, name: "方法分類" }];
+      tab.S.draftMethodAssignments = { [itemId]: categoryId };
+    }
+
+    const select = tab.document.getElementById(controlId);
+    Object.assign(select, { id: controlId, tagName: "SELECT", type: "select-one", value: categoryId });
+    tab.document.activeElement = select;
+    const main = tab.document.getElementById("main");
+    const writesBefore = main.innerHTMLWrites;
+
+    for (let update = 1; update <= 4; update += 1) {
+      const remote = isCause
+        ? { causeClassVersion: update, draftCats: [], draftCauseAssignments: {} }
+        : { methodClassVersion: update, draftMethodCats: [], draftMethodAssignments: {} };
+      tab.applyRemote(remote, tab.S.step);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    assert.equal(main.innerHTMLWrites, writesBefore, `${kind} select must defer repaint while focused`);
+    assert.equal(tab.document.activeElement, select);
+    assert.equal(select.value, categoryId);
+    const assignments = isCause ? tab.S.draftCauseAssignments : tab.S.draftMethodAssignments;
+    assert.equal(assignments[itemId], categoryId, `${kind} local selection must survive remote snapshots`);
+
+    tab.document.activeElement = null;
+    tab.fire("focusout", { target: select });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(main.innerHTMLWrites > writesBefore, `${kind} deferred repaint must flush after focus leaves`);
+    assert.equal(select.value, categoryId);
+  }
+
+  test("repeated remote snapshots do not reset a focused Step 9 or Step 15 classification select", async () => {
+    await classificationSelectSurvivesRemotePaint("cause");
+    await classificationSelectSurvivesRemotePaint("method");
   });
 
   /** Puts a room at Step 14 with one method card owned by this tab. */
@@ -349,6 +594,6 @@ if (!databaseUrl) {
     const card = await settled(tab, "m1");
     assert.match(card.checkMsg, /^本機規則檢查：/);
     assert.doesNotMatch(card.checkMsg, /AI 建議/);
-    assert.ok(["已完成對應檢查", "需要修改說明"].includes(card.status), `unexpected status ${card.status}`);
+    assert.ok(["已完成對應檢查", "建議補充", "需要修改說明"].includes(card.status), `unexpected status ${card.status}`);
   });
 }

@@ -132,20 +132,69 @@ export const migrations: Migration[] = [
     id: "0003_release_member_sessions",
     sql: /* sql */ `
       -- A member id may no longer be re-joined without presenting the token
-      -- that already holds it. Every session issued before that rule existed
-      -- was handed to a browser that did not keep it anywhere a reload could
-      -- find, so leaving these digests in place would lock each of those
-      -- students out of their own identity the first time they refresh, and
-      -- their existing cards would go read-only under canEditCard().
-      --
-      -- Clearing the digest returns each row to the "never claimed" state the
-      -- join path treats as claimable, so the next join takes the id back. It
-      -- costs every live session one re-join, which the client does on its own.
-      --
-      -- Until each id is claimed again it is as takeable as it was before this
-      -- release, so this leaves a window rather than opening a hole: rooms
-      -- already carried that exposure, and each one closes on first join.
+      -- that already holds it. Sessions issued before that rule were not kept
+      -- across reloads, so release them once during this upgrade.
       update members set session_token_hash = null, session_expires_at = null;
+    `,
+  },
+  {
+    id: "0004_room_membership_policy",
+    sql: /* sql */ `
+      alter table rooms
+        add column expected_member_count smallint,
+        add column members_locked boolean not null default false;
+
+      alter table rooms
+        add constraint rooms_expected_member_count_check
+          check (expected_member_count is null or expected_member_count between 1 and 12);
+    `,
+  },
+  {
+    id: "0005_authoritative_item_versions",
+    sql: /* sql */ `
+      -- Snapshot absence is not deletion. These versions let PostgreSQL keep
+      -- the newest explicit content or tombstone from each collaborating client.
+      alter table submissions
+        add column content_version bigint not null default 0,
+        add column deleted_at timestamptz,
+        add column deleted_version bigint not null default 0;
+
+      alter table votes
+        add column content_version bigint not null default 0,
+        add column deleted_at timestamptz,
+        add column deleted_version bigint not null default 0;
+
+      alter table vote_rounds
+        add column content_version bigint not null default 0;
+
+      create index submissions_live_room_kind_idx
+        on submissions (room_id, kind, item_id)
+        where deleted_at is null;
+      create index votes_live_room_kind_round_idx
+        on votes (room_id, kind, round, member_id)
+        where deleted_at is null and content_version >= deleted_version;
+    `,
+  },
+  {
+    id: "0006_remove_unused_membership_policy",
+    sql: /* sql */ `
+      -- The activity intentionally uses the members who actually joined. The
+      -- fixed-capacity policy never had a teacher-facing control and could
+      -- otherwise become a dormant path that unexpectedly refuses a student.
+      alter table rooms
+        drop constraint if exists rooms_expected_member_count_check,
+        drop column if exists expected_member_count,
+        drop column if exists members_locked;
+
+      -- Voting never deletes a ballot in place; a restart opens a new round.
+      -- Remove the unused tombstone path instead of carrying a protocol that
+      -- no product action can produce.
+      delete from votes
+        where deleted_at is not null and deleted_version > content_version;
+      drop index if exists votes_live_room_kind_round_idx;
+      alter table votes
+        drop column if exists deleted_at,
+        drop column if exists deleted_version;
     `,
   },
 ];

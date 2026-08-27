@@ -1,3 +1,10 @@
+    function renderServerState(){let wasMuted=syncMuted;syncMuted=true;try{render()}finally{syncMuted=wasMuted}}
+    function applyUnchangedRoomPolicy(data){
+      if(!applyRoomPolicy(data))return false;
+      acknowledgeMemberSources(data);
+      if(!imeComposing&&!activeDraftControl())renderServerState();
+      return true;
+    }
     async function pollLoop(session){
       while(SYNC.session===session&&S.joined&&!SYNC.offline){
         try{
@@ -19,6 +26,7 @@
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           if(data.unchanged){
+            applyUnchangedRoomPolicy(data);
             /* The server may be configured not to hold the request at all
                (SYNC_LONG_POLL_MS=0), in which case this answers immediately and
                an unpaced loop would hammer a full snapshot read per iteration. */
@@ -29,9 +37,9 @@
              the revision past what this response carries. Applying the older
              snapshot would only cause a needless conflict on the next push. */
           if((data.revision||0)<SYNC.revision)continue;
-          SYNC.revision=data.revision||0;
-          SYNC.serverJson=canonJson(data.snapshot||{});
-          applyRemote(data.snapshot);
+          applyRoomPolicy(data);SYNC.revision=data.revision||0;
+          SYNC.serverJson=serverSnapshotJson(data.snapshot);
+          applyRemote(data.snapshot,data.currentStep);
           schedulePush();
         }catch(e){
           if(SYNC.session!==session)return;
@@ -60,13 +68,18 @@
             throw new Error("HTTP 404");
           }
           if(res.status===429){let wait=retryAfterMs(res);setSyncStatus(false,"伺服器暫時限制了請求，"+Math.round(wait/1000)+" 秒後自動再試。");setTimeout(schedulePush,wait);return false}
-          if(res.status===409){let other=await res.json();SYNC.revision=other.revision||0;SYNC.serverJson=canonJson(other.snapshot||{});applyRemote(other.snapshot);continue}
+          if(res.status===409){let other=await res.json();applyRoomPolicy(other);SYNC.revision=other.revision||0;SYNC.serverJson=serverSnapshotJson(other.snapshot);applyRemote(other.snapshot,other.currentStep);continue}
           if(!res.ok)throw new Error("HTTP "+res.status);
           let data=await res.json();
           /* Only move forward: a poll running in parallel may already have seen
              a later revision, and rewinding would strand serverJson on an older
              snapshot. */
           if((data.revision||0)>SYNC.revision){SYNC.revision=data.revision||0;SYNC.serverJson=json}
+          let policyChanged=applyRoomPolicy(data),beforeStep=S.step;applyAuthoritativeProgress(data.currentStep);
+          if(policyChanged||S.step!==beforeStep){
+            if(imeComposing||activeDraftControl()){remoteDraftSnapshot=captureRemoteDraft();remotePaintPending=true}
+            else renderServerState();
+          }
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           return true;
@@ -86,12 +99,14 @@
     }
     async function refreshFromServer(){
       if(!S.joined||SYNC.offline||!SYNC.session)return;
+      let session=SYNC.session;
       try{
         let res=await fetch(roomApi("state"),{cache:"no-store",headers:syncHeaders(false)});
         if(!res.ok)return;
         let data=await res.json();
-        SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
-        applyRemote(data.snapshot);schedulePush();
+        if(SYNC.session!==session||(data.revision||0)<SYNC.revision)return;
+        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);
+        applyRemote(data.snapshot,data.currentStep);schedulePush();
       }catch(e){}
     }
     /* An AI review is answered from the server's authoritative snapshot, so

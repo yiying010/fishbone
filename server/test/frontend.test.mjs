@@ -26,8 +26,10 @@ const scriptFiles = [
   "fishbone-steps-solution.js",
   "fishbone-cards.js",
   "fishbone-methods.js",
+  "fishbone-revote.js",
   "fishbone-diagram-data.js",
   "fishbone-svg.js",
+  "fishbone-revision.js",
   "fishbone-bootstrap.js",
 ];
 await Promise.all(styleFiles.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")));
@@ -195,17 +197,90 @@ test("a failed re-join restores the sync it interrupted", () => {
   assert.match(failure, /if\(wasJoined\)setTimeout\(\(\)=>\{if\(S\.joined&&!SYNC\.session\)connectRoom\(\)\}/);
 });
 
-test("the local cache is merged before the server snapshot, not after", () => {
-  // mergeRoom lets the incoming object win for the fields it does not version,
-  // so the other order lets a stale device overwrite what the group confirmed.
+test("the server snapshot is the only shared room authority", () => {
   const join = html.match(/async function joinActivity\(\)\{[\s\S]*?\n {4}\}/)[0];
-  assert.match(join, /connectRoom\(true,\(\)=>\{\s*loadRoom\(room\);/);
+  assert.doesNotMatch(join, /loadRoom\(room\)/);
+  assert.match(join, /connectRoom\(true,\(\)=>\{\s*ensureSource\(/);
 
-  const connect = html.match(/async function connectRoom\(initial,beforeApply\)\{[\s\S]*?\n {4}\}/)[0];
+  const connectStart = html.indexOf("async function connectRoom(initial,beforeApply)");
+  const connectEnd = html.indexOf("async function recoverSession", connectStart);
+  assert.ok(connectStart >= 0 && connectEnd > connectStart, "connectRoom not found");
+  const connect = html.slice(connectStart, connectEnd);
   assert.ok(
-    connect.indexOf("beforeApply()") < connect.indexOf("applyRemote(data.snapshot)"),
-    "the callback must run before the server snapshot is applied",
+    connect.indexOf("beforeApply()") < connect.indexOf("applyRemote(data.snapshot"),
+    "the member identity callback must run before the server snapshot is applied",
   );
+  assert.match(html, /function loadRoom\(room\)\{\}/);
+  assert.doesNotMatch(html, /new BroadcastChannel\(/);
+  assert.doesNotMatch(html, /localStorage\.(?:getItem|setItem)\(/);
+});
+
+test("a same-tab reload restores the authenticated room without caching room data", () => {
+  assert.match(html, /const ROOM_CONTEXT_KEY="fishboneRoomContext"/);
+  assert.match(html, /function restoreRoomSession\(/);
+  assert.match(html, /loadRoomToken\(saved\.roomCode\)/);
+  assert.match(html, /if\(typeof restoreRoomSession==="function"\)restoreRoomSession\(\)/);
+  assert.doesNotMatch(html, /sessionStorage\.setItem\([^\n]*(?:snapshot|distresses|causes|methods|votes)/i);
+});
+
+test("classification has a native select fallback and focused controls keep one-click submission", () => {
+  assert.match(html, /function classifyMoveControl\(/);
+  assert.match(html, /moveClassBySelect\('distress'/);
+  assert.match(html, /moveClassBySelect\('cause'/);
+  assert.match(html, /moveMethodClassBySelect/);
+  assert.match(html, /pendingDraftButtonActivation/);
+  assert.match(html, /if\(remotePaintPending\)remoteDraftSnapshot=captureRemoteDraft\(\)\|\|remoteDraftSnapshot/);
+  assert.match(html, /document\.addEventListener\("pointerdown"/);
+  assert.match(html, /pending\.control\.blur\(\)/);
+});
+
+test("multiplayer submission gates wait for every member before voting or advancing", () => {
+  assert.match(html, /function submissionStatusFromSources\(/);
+  assert.match(html, /function distressSubmissionStatus\(/);
+  assert.match(html, /step===2&&distressSubmissionStatus\(\)\.all/);
+  assert.match(html, /等待所有成員完成分群提交，再開始投票/);
+  assert.match(html, /等待所有成員完成原因分類提交，再開始投票/);
+  assert.match(html, /等待所有成員完成方法分類提交，再開始投票/);
+});
+
+test("Step 5 and Step 11 drafts use all active ideas without domain templates", () => {
+  assert.match(html, /function draftIntegrationPlan\(/);
+  assert.match(html, /function makeGenericProblemDraft\(/);
+  assert.match(html, /function makeGenericGoalDraft\(/);
+  assert.match(html, /return makeGenericProblemDraft\(base,relevantProblemSupplements\(\)\)/);
+  assert.doesNotMatch(html, /建立清楚的課業優先順序與時間安排/);
+  assert.doesNotMatch(html, /合理安排課業完成時間/);
+});
+
+test("Step 14 keeps the authoritative three-level method review", () => {
+  assert.match(html, /function methodCauseAssessment\(/);
+  assert.match(html, /level:"suggest"/);
+  assert.match(html, /level==="suggest"[^\n]*"建議補充"/);
+  assert.match(html, /沒有事先整理截止日期/);
+});
+
+test("one shared update can advance at most one activity step", () => {
+  const advance = html.match(/function autoAdvanceFromShared\(\)\{[\s\S]*?\n {4}\}/);
+  assert.ok(advance, "autoAdvanceFromShared not found");
+  assert.match(advance[0], /let step=S\.step,next=step/);
+  assert.match(advance[0], /step===3&&!S\.groupingConfirmed[\s\S]*canFinalizeGrouping\(\)/);
+  assert.match(advance[0], /finalizeGroupingFromVote\(\)[\s\S]*setTimeout\(\(\)=>saveRoom\(\),0\)/);
+  assert.match(advance[0], /else if\(step===3/);
+  assert.match(advance[0], /S\.step=next/);
+  assert.doesNotMatch(advance[0], /while\s*\(/);
+});
+
+test("a grouping finalizer reports whether the merged vote state was committed", () => {
+  assert.match(html, /function finalizeGroupingFromVote\(\)\{[^}]*if\(!p\)return false;[^}]*S\.step=4;return true\}/);
+});
+
+test("Step 11 shows the optional cause focus before the idea input and updates its hint", () => {
+  assert.match(html, /function goalPriorityBlock\(/);
+  assert.match(html, /function goalFocusHint\(/);
+  const step11 = html.match(/function step11\(\)\{[\s\S]*?\n {4}\}/);
+  assert.ok(step11, "step11 not found");
+  assert.ok(step11[0].indexOf("goalPriorityBlock()") < step11[0].indexOf('id="goalIdea"'));
+  assert.ok(step11[0].indexOf("goalFocusHint()") < step11[0].indexOf('id="goalIdea"'));
 });
 
 test("a 429 is honoured rather than being overwritten by the generic backoff", () => {
@@ -229,6 +304,37 @@ test("the teacher creates the room; the code is never typed by a person", () => 
   assert.match(html, /id="createRoomBtn"/);
   // The old placeholder invited exactly the guessable codes this replaced.
   assert.doesNotMatch(html, /FISH-042/);
+  assert.doesNotMatch(html, /id="expectedMemberCount"/);
+  assert.match(html, /body:"\{\}"/);
+});
+
+test("tie votes require an explicit, per-member restart and show the previous choice", () => {
+  const revoteSource = scripts[scriptFiles.indexOf("fishbone-revote.js")];
+  assert.match(html, /function revotePreviousHint\(/);
+  assert.match(html, /你上一輪選擇的是/);
+  assert.match(html, /按「重新投票」後再重新選擇/);
+  assert.match(html, /function requireRevoteReady\(/);
+  assert.match(html, /function restartVoteAfterTie\(/);
+  assert.match(html, />重新投票<\/button>/);
+  assert.match(html, /revoteGates=mergeRevoteGates/);
+  assert.match(revoteSource, /\.join\("_"\)/);
+  assert.doesNotMatch(revoteSource, /\.join\("\|"\)/);
+  assert.match(html, /function mergeVoteRounds\(/);
+  assert.match(html, /if\(remote>local\)\{S\[roundKey\]=remote;S\[votesKey\]=data\[votesKey\]\|\|\{\}\}/);
+  assert.match(revoteSource, /if\(gate\)\{gate=/);
+});
+
+test("ordinary back navigation is read-only while designated return-edit steps stay editable", () => {
+  assert.match(html, /function historyReadonly\(/);
+  assert.match(html, /function historyReturnEditable\(/);
+  assert.match(html, /🚫 僅供查看/);
+  assert.match(html, /main\.querySelectorAll\("input,textarea,select,button"\)/);
+  assert.match(html, /main\.querySelectorAll\("\[ondrop\],\[ondragover\]"\)/);
+  assert.match(html, /removeAttribute\("ondrop"\)/);
+  assert.match(html, /origin===9&&target===8/);
+  assert.match(html, /origin===16&&target===15/);
+  assert.match(html, /origin===18&&target===17/);
+  assert.match(html, /origin===19&&target===18/);
 });
 
 test("the client canonicalises a code the same way the server does", () => {

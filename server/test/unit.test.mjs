@@ -124,6 +124,39 @@ test("snapshot identifiers and colors cannot become executable DOM attributes", 
     () => assertSnapshot({ sources: [{ id: "u1" }], groupingVotes: { "u1\" onclick=alert(1)": "p1" } }, 100_000),
     /letters, digits, _ or -/,
   );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], deletedProblemDetailIds: ["d1\" onclick=alert(1)"] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], deletedGoalIdeaIds: ["g1\" onclick=alert(1)"] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+});
+
+test("per-member method classification baselines are accepted and their owner ids are validated", () => {
+  const accepted = assertSnapshot({
+    sources: [{ id: "u1", name: "小安" }],
+    methodClassOwnerBaselines: {
+      u1: {
+        owner: "u1",
+        generation: 2,
+        version: 3,
+        groups: [{ name: "時間管理", ids: ["m1"] }],
+        skipped: [],
+      },
+    },
+  }, 100_000);
+  assert.equal(accepted.methodClassOwnerBaselines.u1.owner, "u1");
+  assert.throws(
+    () => assertSnapshot({
+      sources: [{ id: "u1" }],
+      methodClassOwnerBaselines: {
+        "u1\" onclick=alert(1)": { owner: "u1", groups: [] },
+      },
+    }, 100_000),
+    /letters, digits, _ or -/,
+  );
 });
 
 test("a field name that carries both an id list and an object list is checked as each", () => {
@@ -635,10 +668,10 @@ test("both ballot shapes are read, and a stale round is kept as its own round", 
   assert.deepEqual(
     votes.sort((a, b) => a.memberId.localeCompare(b.memberId)),
     [
-      { memberId: "u1", value: "gp-1", round: 3 },
-      { memberId: "u2", value: "gp-2", round: 2 },
+      { memberId: "u1", value: "gp-1", round: 3, contentVersion: 0 },
+      { memberId: "u2", value: "gp-2", round: 2, contentVersion: 0 },
       // a bare value belongs to the map's current round
-      { memberId: "u3", value: "gp-1", round: 3 },
+      { memberId: "u3", value: "gp-1", round: 3, contentVersion: 0 },
     ],
   );
 });

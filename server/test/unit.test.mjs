@@ -124,6 +124,14 @@ test("snapshot identifiers and colors cannot become executable DOM attributes", 
     () => assertSnapshot({ sources: [{ id: "u1" }], groupingVotes: { "u1\" onclick=alert(1)": "p1" } }, 100_000),
     /letters, digits, _ or -/,
   );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], deletedProblemDetailIds: ["d1\" onclick=alert(1)"] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], deletedGoalIdeaIds: ["g1\" onclick=alert(1)"] }, 100_000),
+    /letters, digits, _ or -/,
+  );
 });
 
 test("per-member method classification baselines are accepted and their owner ids are validated", () => {

@@ -242,7 +242,9 @@ const ID_ARRAY_FIELDS = new Set([
   "ids",
   "priority",
   "deletedDistressIds",
+  "deletedProblemDetailIds",
   "deletedCauseIds",
+  "deletedGoalIdeaIds",
   "deletedMethodIds",
 ]);
 const ID_MAP_FIELDS = new Set([

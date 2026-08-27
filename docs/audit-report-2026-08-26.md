@@ -90,7 +90,7 @@ fail 0
 2. **資源上限**：長輪詢尚無每個 token／房間的併發上限；AI 目前欠缺房間總額度限制。建議加入 per-member/per-room concurrency 與 budget。
 3. **同源本機資料隱私**：完整活動快照仍儲存在 `localStorage`，同一 origin 的其他應用程式亦可讀取。最有效的措施是使用獨立 hostname；若無法，應移除完整快照的永久本機保存並設計明確清除策略。
 4. **前端合併邏輯的 SoC**：前端資產已依責任拆分為有序載入的多個檔案，但 `mergeRoom` 仍以多層 wrapper 組成，`render()` 也同時承擔畫面、持久化與網路推送。建議在既有拆分之上再抽出 pure merge／command 模組，讓 render 成為純畫面更新。
-5. **測試分層**：加入房間、身分擁有權與 Step 14 的 AI 檢查已由 `server/test/frontend-behavior.test.mjs` 實際執行出貨的前端 script 驗證，不再只靠 regex 斷言；其餘步驟仍是靜態文字比對，應逐步抽出純函式與 reducer，改用表格化行為測試。專案目前沒有 CI，所有驗證都仰賴開發者本機執行；應建立 CI 並提供 PostgreSQL service，讓需要資料庫的測試不會被長期略過。
+5. **測試分層**：加入房間、身分擁有權與 Step 14 的 AI 檢查已由 `server/test/frontend-behavior.test.mjs` 實際執行出貨的前端 script 驗證，不再只靠 regex 斷言；其餘步驟仍是靜態文字比對，應逐步抽出純函式與 reducer，改用表格化行為測試。CI 已建立（`.github/workflows/ci.yml`），提供 PostgreSQL service 並要求整套測試的跳過數為 0，因此需要資料庫的測試不會再被長期略過而無人察覺。
 
 ## 建議後續順序
 

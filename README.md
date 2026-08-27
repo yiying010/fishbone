@@ -127,6 +127,8 @@ docker run -d --name fishbone-test-db -p 127.0.0.1:5433:5432 \
 TEST_DATABASE_URL=postgres://test:test@127.0.0.1:5433/fishbone_test npm test
 ```
 
+`.github/workflows/ci.yml` 會在每個 pull request 與推送到 `main`、`site-deployment` 時執行同一套測試，並附上一個 PostgreSQL service，因此 CI 上跑的一定是完整的測試套件。該 job 額外要求跳過數為 0：`npm test` 在沒有資料庫時會跳過需要資料庫的檔案然後正常結束，而一個綠燈卻什麼也沒驗證的 CI 正是這道檢查要防的事。另一個 job 只做一件事：建置 `Dockerfile`，因為那是部署用的產物，其他地方都不會編譯它。
+
 `server/test/frontend.test.mjs` 斷言的是前端資產的原始碼文字，只能證明某段程式存在。`server/test/frontend-behavior.test.mjs` 則把實際出貨的那些 script 載進來，接上真的伺服器執行，因此加入房間、身分擁有權與 Step 14 的 AI 檢查是被實際跑過而非從原始碼推論的。它需要資料庫，並在網路邊界替換 provider，所以連 `OpenAiReviewClient` 送出的請求與它要解析的回應形狀也在測試範圍內。
 
 ## 部署

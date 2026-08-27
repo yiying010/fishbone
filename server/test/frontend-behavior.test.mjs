@@ -104,7 +104,8 @@ if (!databaseUrl) {
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
     "requestAiReview", "sharedSnapshot", "canonJson", "loadRoomToken", "pushRoom",
-    "runMethodAiCheck",
+    "runMethodAiCheck", "applyRemote", "renameDraftCat", "renameDraftMethodCat",
+    "submitCauseClass", "submitMethodClass",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -138,26 +139,40 @@ if (!databaseUrl) {
      * the student was actually shown.
      */
     const elements = new Map();
+    const listeners = new Map();
+    const queryResults = [];
     const element = () => new Proxy(
       { style: {}, classList: { add() {}, remove() {}, toggle() {} }, dataset: {},
-        textContent: "", innerHTML: "", className: "", value: undefined },
-      { get: (target, prop) => (prop in target ? target[prop] : () => {}) },
+        textContent: "", innerHTML: "", innerHTMLWrites: 0, className: "", value: undefined },
+      {
+        get: (target, prop) => (prop in target ? target[prop] : () => {}),
+        set: (target, prop, value) => {
+          if (prop === "innerHTML") target.innerHTMLWrites += 1;
+          target[prop] = value;
+          return true;
+        },
+      },
     );
     const byId = (id) => {
       if (!elements.has(id)) elements.set(id, element());
       return elements.get(id);
     };
+    const documentStub = {
+      activeElement: null,
+      getElementById: byId,
+      querySelector: () => element(),
+      querySelectorAll: () => queryResults,
+      addEventListener(type, handler) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(handler);
+      },
+      createElement: () => element(),
+      title: "",
+    };
     const scope = {
       location: { protocol: "http:", pathname: "/fishbone.html", href: `${origin}/fishbone.html` },
       window: { addEventListener() {}, removeEventListener() {} },
-      document: {
-        getElementById: byId,
-        querySelector: () => element(),
-        querySelectorAll: () => [],
-        addEventListener() {},
-        createElement: () => element(),
-        title: "",
-      },
+      document: documentStub,
       navigator: { language: "zh-TW" },
       sessionStorage: store(sessionStore),
       localStorage: store(sharedLocal),
@@ -168,7 +183,17 @@ if (!databaseUrl) {
       confirm: () => true,
     };
     const made = new Function(...Object.keys(scope), body)(...Object.values(scope));
-    const tab = { ...made, elements, shown: () => String(byId("gateMsg").innerHTML), sessionStore };
+    const tab = {
+      ...made,
+      document: documentStub,
+      elements,
+      queryResults,
+      fire(type, event) {
+        for (const handler of listeners.get(type) || []) handler(event);
+      },
+      shown: () => String(byId("gateMsg").innerHTML),
+      sessionStore,
+    };
     openTabs.push(tab);
     return tab;
   }
@@ -230,6 +255,152 @@ if (!databaseUrl) {
     fresh.S.joined = true;
     assert.notEqual(fresh.S.selfId, owner.S.selfId);
     assert.equal(await fresh.connectRoom(true), "ok");
+  });
+
+  function activateStubbedMember(tab) {
+    tab.S.joined = true;
+    tab.S.active = tab.S.selfId;
+    tab.S.nameDraft = "測試成員";
+    const self = tab.S.sources.find((source) => source.id === tab.S.selfId);
+    self.name = tab.S.nameDraft;
+    self.joined = true;
+  }
+
+  async function submitFocusedClassificationName(kind, value) {
+    const tab = openTab();
+    activateStubbedMember(tab);
+    const cause = { id: "c1", text: "原因", createdBy: tab.S.selfId, status: "已確認為原因" };
+    tab.S.causes = [cause];
+
+    const isCause = kind === "cause";
+    const categoryId = isCause ? "dc1" : "dmc1";
+    const controlId = isCause ? `draft-cat-${categoryId}` : `draft-method-cat-${categoryId}`;
+    const action = isCause ? "submitCauseClass()" : "submitMethodClass()";
+    const buttonText = isCause ? "提交我的原因分類" : "提交我的方法分類";
+    tab.S.step = isCause ? 9 : 15;
+    if (isCause) {
+      tab.S.draftCats = [{ id: categoryId, name: "舊大要因" }];
+      tab.S.draftCauseAssignments = { c1: categoryId };
+    } else {
+      tab.S.methods = [{
+        id: "m1", text: "方法", createdBy: tab.S.selfId, status: "已完成對應檢查",
+        causes: ["c1"], effect: "能回應原因",
+      }];
+      tab.S.draftMethodCats = [{ id: categoryId, name: "舊大方法" }];
+      tab.S.draftMethodAssignments = { m1: categoryId };
+    }
+
+    const control = tab.document.getElementById(controlId);
+    Object.assign(control, {
+      id: controlId,
+      tagName: "INPUT",
+      type: "text",
+      value,
+      selectionStart: value.length,
+      selectionEnd: value.length,
+    });
+
+    let submitted = false;
+    let replacement;
+    const runSubmit = () => {
+      submitted = true;
+      if (isCause) tab.submitCauseClass();
+      else tab.submitMethodClass();
+    };
+    const makeButton = () => {
+      const button = {
+        disabled: false,
+        id: "",
+        isConnected: true,
+        textContent: buttonText,
+        click: runSubmit,
+        getAttribute: (name) => (name === "onclick" ? action : null),
+      };
+      button.closest = (selector) => (selector === "button" ? button : null);
+      return button;
+    };
+    const original = makeButton();
+    replacement = makeButton();
+    control.blur = () => {
+      tab.document.activeElement = null;
+      if (isCause) tab.renameDraftCat(categoryId, control.value);
+      else tab.renameDraftMethodCat(categoryId, control.value);
+      original.isConnected = false;
+    };
+    tab.queryResults.push(replacement);
+    tab.document.activeElement = control;
+
+    tab.fire("pointerdown", { target: original, preventDefault() {} });
+    tab.fire("click", {
+      target: original,
+      preventDefault() {},
+      stopImmediatePropagation() {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(submitted, true, `${kind} classification must submit on the first click`);
+    const proposals = isCause ? tab.S.causeClassProposals : tab.S.methodClassProposals;
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].groups[0].name, value);
+  }
+
+  test("Step 9 and Step 15 preserve English and numeric names on a direct submit click", async () => {
+    await submitFocusedClassificationName("cause", "RootCause789");
+    await submitFocusedClassificationName("method", "MethodGroup902");
+  });
+
+  async function classificationSelectSurvivesRemotePaint(kind) {
+    const tab = openTab();
+    activateStubbedMember(tab);
+    const isCause = kind === "cause";
+    const categoryId = isCause ? "dc1" : "dmc1";
+    const itemId = isCause ? "c1" : "m1";
+    const controlId = isCause ? `move-cause-${itemId}` : `move-method-${itemId}`;
+    tab.S.step = isCause ? 9 : 15;
+    if (isCause) {
+      tab.S.causes = [{ id: itemId, text: "原因", createdBy: tab.S.selfId, status: "已確認為原因" }];
+      tab.S.draftCats = [{ id: categoryId, name: "原因分類" }];
+      tab.S.draftCauseAssignments = { [itemId]: categoryId };
+    } else {
+      tab.S.causes = [{ id: "c1", text: "原因", createdBy: tab.S.selfId, status: "已確認為原因" }];
+      tab.S.methods = [{
+        id: itemId, text: "方法", createdBy: tab.S.selfId, status: "已完成對應檢查",
+        causes: ["c1"], effect: "能回應原因",
+      }];
+      tab.S.draftMethodCats = [{ id: categoryId, name: "方法分類" }];
+      tab.S.draftMethodAssignments = { [itemId]: categoryId };
+    }
+
+    const select = tab.document.getElementById(controlId);
+    Object.assign(select, { id: controlId, tagName: "SELECT", type: "select-one", value: categoryId });
+    tab.document.activeElement = select;
+    const main = tab.document.getElementById("main");
+    const writesBefore = main.innerHTMLWrites;
+
+    for (let update = 1; update <= 4; update += 1) {
+      const remote = isCause
+        ? { causeClassVersion: update, draftCats: [], draftCauseAssignments: {} }
+        : { methodClassVersion: update, draftMethodCats: [], draftMethodAssignments: {} };
+      tab.applyRemote(remote, tab.S.step);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    assert.equal(main.innerHTMLWrites, writesBefore, `${kind} select must defer repaint while focused`);
+    assert.equal(tab.document.activeElement, select);
+    assert.equal(select.value, categoryId);
+    const assignments = isCause ? tab.S.draftCauseAssignments : tab.S.draftMethodAssignments;
+    assert.equal(assignments[itemId], categoryId, `${kind} local selection must survive remote snapshots`);
+
+    tab.document.activeElement = null;
+    tab.fire("focusout", { target: select });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(main.innerHTMLWrites > writesBefore, `${kind} deferred repaint must flush after focus leaves`);
+    assert.equal(select.value, categoryId);
+  }
+
+  test("repeated remote snapshots do not reset a focused Step 9 or Step 15 classification select", async () => {
+    await classificationSelectSurvivesRemotePaint("cause");
+    await classificationSelectSurvivesRemotePaint("method");
   });
 
   /** Puts a room at Step 14 with one method card owned by this tab. */

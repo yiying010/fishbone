@@ -68,6 +68,13 @@
       });
       return changed;
     }
+    /* An unchanged long-poll reply still carries member metadata. That source
+       list is server-owned, so acknowledge just it without masking a pending
+       local card or vote edit in the rest of the snapshot. */
+    function acknowledgeMemberSources(data){
+      if(!Array.isArray(data&&data.members))return;
+      try{let snapshot=JSON.parse(SYNC.serverJson||"{}");snapshot.sources=plain(S.sources);SYNC.serverJson=canonJson(snapshot)}catch(e){}
+    }
     /* Remote data may merge immediately, but repainting while an input, textarea
        or native select is active would destroy its value, focus, caret or open
        picker. Defer only the paint; the next local command still reads the live

@@ -1,3 +1,9 @@
+    function applyUnchangedRoomPolicy(data){
+      if(!applyRoomPolicy(data))return false;
+      acknowledgeMemberSources(data);
+      if(!imeComposing&&!activeDraftControl())render();
+      return true;
+    }
     async function pollLoop(session){
       while(SYNC.session===session&&S.joined&&!SYNC.offline){
         try{
@@ -19,7 +25,7 @@
           SYNC.failures=0;
           if(!SYNC.connected)setSyncStatus(true,syncOnlineText());
           if(data.unchanged){
-            if(applyRoomPolicy(data)&&!imeComposing&&!activeDraftControl())render();
+            applyUnchangedRoomPolicy(data);
             /* The server may be configured not to hold the request at all
                (SYNC_LONG_POLL_MS=0), in which case this answers immediately and
                an unpaced loop would hammer a full snapshot read per iteration. */
@@ -88,10 +94,12 @@
     }
     async function refreshFromServer(){
       if(!S.joined||SYNC.offline||!SYNC.session)return;
+      let session=SYNC.session;
       try{
         let res=await fetch(roomApi("state"),{cache:"no-store",headers:syncHeaders(false)});
         if(!res.ok)return;
         let data=await res.json();
+        if(SYNC.session!==session||(data.revision||0)<SYNC.revision)return;
         applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);
         applyRemote(data.snapshot,data.currentStep);schedulePush();
       }catch(e){}

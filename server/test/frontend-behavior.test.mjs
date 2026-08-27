@@ -104,6 +104,7 @@ if (!databaseUrl) {
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
     "requestAiReview", "sharedSnapshot", "canonJson", "serverSnapshotJson", "loadRoomToken", "pushRoom",
+    "applyUnchangedRoomPolicy",
     "runMethodAiCheck", "applyRemote", "renameDraftCat", "renameDraftMethodCat",
     "submitCauseClass", "submitMethodClass",
   ];
@@ -259,6 +260,44 @@ if (!databaseUrl) {
     assert.equal(await tab.pushRoom(), true);
     assert.deepEqual(
       tab.requests.filter((request) => request.method === "POST" && request.url.endsWith("/state")),
+      [],
+    );
+  });
+
+  test("a member join does not make idle tabs publish their server-owned sources", async () => {
+    const code = await newRoom();
+    const first = openTab();
+    first.S.roomCode = code;
+    first.S.nameDraft = "小安";
+    first.S.joined = true;
+    assert.equal(await first.connectRoom(true), "ok");
+    if (first.SYNC.pushTimer) clearTimeout(first.SYNC.pushTimer);
+    first.SYNC.pushTimer = null;
+    assert.equal(await first.pushRoom(), true);
+
+    const joined = openTab();
+    joined.S.roomCode = code;
+    joined.S.nameDraft = "小美";
+    joined.S.joined = true;
+    assert.equal(await joined.connectRoom(true), "ok");
+    if (joined.SYNC.pushTimer) clearTimeout(joined.SYNC.pushTimer);
+    joined.SYNC.pushTimer = null;
+
+    const response = await fetch(
+      new URL(`/api/rooms/${code}/state?since=${first.SYNC.revision}`, origin),
+      { headers: { authorization: `Bearer ${first.SYNC.token}` } },
+    );
+    const update = await response.json();
+    assert.equal(update.unchanged, true);
+    assert.equal(first.applyUnchangedRoomPolicy(update), true);
+    if (first.SYNC.pushTimer) clearTimeout(first.SYNC.pushTimer);
+    first.SYNC.pushTimer = null;
+    first.requests.length = 0;
+
+    assert.equal(first.canonJson(first.sharedSnapshot()), first.SYNC.serverJson);
+    assert.equal(await first.pushRoom(), true);
+    assert.deepEqual(
+      first.requests.filter((request) => request.method === "POST" && request.url.endsWith("/state")),
       [],
     );
   });

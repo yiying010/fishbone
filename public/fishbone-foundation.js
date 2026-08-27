@@ -1,30 +1,32 @@
     const stepNames=["開始活動","提出生活困擾","整理相近主題","選擇想分析的問題","界定主要問題","認識向右魚骨圖","提出可能原因","確認原因內容","原因分類與大要因命名","確認向右魚骨圖","建立決策目標","認識向左魚骨圖","提出解決方法","檢查方法與原因對應","確認要放進魚骨圖的方法","成果整理","選擇方案","反思","最終成果呈現與匯出"];
     const ai={
-      1:["歡迎進入「魚骨洞天」。今天會先選一個生活中想分析的問題，再找原因，最後想方法。","請輸入你的姓名或暱稱，以及小組房間碼，加入活動後就可以開始。"],
-      2:["請說出或輸入一個生活困擾；可參考人際、課業、家庭、校園、時間管理等方向。"],
-      3:["請把相近的困擾整理到同一個主題中。整理完成後，提交你的分群結果，再投票選出最適合小組使用的一版。","如果目前只有一張困擾，可以直接往下一步。"],
-      4:["請從已確認的分群中選出目前想分析的一項。每位成員投一票，平票時請先討論再重新投票。"],
-      5:["我會先看看目前選出的共同問題是否夠清楚。如果還有模糊的地方，我會請你補充一個最需要說清楚的地方，讓問題更容易分析。","主要問題草稿整理好後，請每位成員確認：這是不是符合小組原本想討論的問題？"],
-      6:["向右魚骨圖是用來找原因。魚頭放主要問題，魚骨上整理大要因與具體原因。"],
-      7:["提出可能原因","請每個人提出一個或多個可能原因，先求多樣，不急著分類。","如果想不到，可以換角度想：人、環境、時間、規則或工具，哪一邊可能有影響？"],
-      8:["我會先幫每項內容做初步檢查，提醒它可能比較像原因、結果或方法；最後仍由你確認、補充或修正。"],
-      9:["請先把相近的原因整理到大要因下面，並為大要因命名。整理完成後，提交你的原因分類版本，再投票選出最適合放進向右魚骨圖的一版。"],
-      10:["這是目前的向右魚骨圖，請檢查主要問題、大要因和具體原因是否符合原本的想法。"],
-      11:["現在請根據剛剛整理出的原因，提出你覺得想改善的情況。AI 會依全組提出的想法整理成一份決策目標草稿，大家確認後才會成為正式決策目標。","優先處理原因只是選填輔助；目標不一定要一次處理所有原因，但要清楚說出想改善什麼，後面才比較好發展方法。"],
-      12:["向左魚骨圖是用來找方法。魚頭放決策目標，魚骨上整理大方法與具體方法。"],
-      13:["請先提出你想到的做法，可以一個，也可以多個。現在先不用分類，也不用急著連到原因。","你可以把做法說得更清楚一點，例如：誰來做？什麼時候做？怎麼做？需要哪些工具或幫忙？"],
-      14:["請看看你想保留的方法，想一想它主要是在回應哪一個原因。","選好原因後，再用一句話說明：這個方法怎麼幫助我們達成決策目標？"],
-      15:["請確認要放進魚骨圖的方法，並為它們整理大方法名稱。"],
-      16:["請看一下這一版雙向魚骨圖，確認它是不是符合小組目前的想法。","如果有內容漏掉、放錯位置，或需要調整，可以選擇返回修改。"],
-      17:["現在請看看正式放進向左魚骨圖的方法，先選一個你覺得最做得到的方法，並寫下原因。","接著再選一個你覺得最有新意的方法，也寫下原因。兩個選擇可以相同，也可以不同，但都要和前面找出的原因與決策目標有關。"],
-      18:["最後請寫下你的反思。可以想一想：魚骨圖怎麼幫助你看見問題背後的原因？你在小組整理過程中有什麼新的發現？"],
-      19:["這是小組最後成果。請查看完整雙向魚骨圖、最可行與最獨特方法，以及小組反思摘要；確認後可以匯出圖片版或文字版成果。"]
+      1:["請輸入你的姓名或暱稱，還有小組房間碼。加入後，你提出的卡片會標記為你的名稱，方便小組知道每個想法是誰提出的。","可以使用暱稱，不一定要使用真實姓名。"],
+      2:["請說出或輸入一個你在生活中想分析的困擾。可以是課業、人際、家庭、校園生活、時間管理，或其他你覺得常遇到的小問題。","請用一個具體情境來寫，例如：我常常忘記作業期限、做小組報告時分工不平均。先不用想原因，也不用想解決方法。"],
+      3:["請看看小組成員提出的困擾卡，把你覺得相近的困擾放在同一個主題下面，並替每個主題取一個清楚的名稱。","整理完成後，請提交你的分群版本，大家會一起投票選出最適合小組使用的一版。"],
+      4:["請看看目前的候選問題，想一想：哪一個問題最適合小組一起用魚骨圖分析？","請選擇你覺得最想分析、也最適合繼續找原因和想方法的問題。大家投票後，票數最高的一項會成為小組的共同問題。"],
+      5:["剛剛大家已經選出共同問題。現在請一起把它說得更清楚，讓後面比較容易找原因。AI老師會看目前的共同問題，挑一個最需要補清楚的地方請你們補充。","請依照畫面上的提示，補充一點就好。補充完成後，AI老師會把大家已提供的內容整理成一份主要問題草稿。請大家確認草稿有沒有保留原本想討論的意思。"],
+      6:["接下來要使用向右魚骨圖來找原因。魚頭放剛剛確認的主要問題，魚骨上會放大要因和具體原因。","現在先看懂圖的結構：我們不是馬上想方法，而是先想一想，這個問題可能是哪些原因造成的。看懂後，請按下一步。"],
+      7:["請針對剛剛確認的主要問題，提出你想到的可能原因。先不用急著分類，也不用急著判斷對不對；只要寫下你覺得可能有影響的原因。","如果一開始想不到，可以換一個角度想想看：人、環境、時間、規則或工具，哪一邊可能有影響？"],
+      8:["AI老師會先看每張原因卡，做一個初步判斷：它比較像原因、方法、結果，還是需要再釐清。","請查看你提出的原因卡，確認 AI老師的判斷後，決定下一步：同意判斷、修改內容、移到方法暫存區，或暫不使用。"],
+      9:["請把已確認為原因的卡片整理到大要因下面，並替每個大要因取一個清楚的名稱。","整理完成後，請提交你的原因分類版本。大家會一起投票，選出最適合放進向右魚骨圖的一版。"],
+      10:["這是目前整理好的向右魚骨圖。請檢查魚頭的主要問題、大要因名稱，以及放在各大要因下面的具體原因，看看是不是符合小組目前的想法。","如果覺得可以繼續，請表態可繼續；如果覺得原因分類還需要調整，請表態需要修改。"],
+      11:["現在請根據剛剛整理出的原因，提出你覺得想改善的情況。可以想一想：如果要讓這個主要問題變好一點，你希望先改善哪一種狀況？","你也可以先勾選想優先回應的原因，幫助自己聚焦，再提出目標想法。這一題是選填。AI老師會把大家已提出的目標想法整理成一份決策目標草稿。草稿確認前還不是正式目標，大家表態同意後，才會放到向左魚骨圖的魚頭。"],
+      12:["接下來要使用向左魚骨圖來想方法。魚頭放剛剛確認的決策目標，魚骨上會整理大方法和具體方法。","請先看懂圖的結構：每個方法之後都要能說明它回應哪個原因，也要能說明它怎麼幫助達成決策目標。看懂後，請按下一步。"],
+      13:["請針對剛剛確認的決策目標，提出你想到的可能方法。現在先不用分類，也不用急著連到原因；先把你覺得可以嘗試的做法寫下來。","如果前面有放進方法暫存區的內容，也可以取回，成為你的候選方法。"],
+      14:["請檢查你提出的方法，看看它主要回應哪一個已確認的原因。選好原因後，再用一句話說明：這個方法怎麼幫助我們達成決策目標？","寫好後，請送交 AI老師檢查。AI老師會看方法、原因和決策目標之間的關係是否大致清楚。"],
+      15:["請看看已完成檢查的方法，決定哪些方法要納入這一版向左魚骨圖。要納入的方法，請整理到大方法下面，並替每個大方法取一個清楚的名稱；暫時不想放進魚骨圖的方法，可以放到暫不納入方法。","整理完成後，請提交你的向左魚骨圖版本。大家會一起投票，選出最適合放進正式成果的一版。"],
+      16:["請看一下這一版雙向魚骨圖，確認它是不是符合小組目前的想法。請檢查主要問題、原因分類、決策目標、方法分類，以及方法和原因的對應關係。","如果覺得成果正確，可以繼續；如果覺得需要修改，請表態需要返回修改。接著小組會選出最需要先回到哪一步調整。"],
+      17:["現在請看看正式放進向左魚骨圖的方法，選一個你覺得最做得到的方法，並寫下原因。","接著再選一個你覺得最有新意的方法，也寫下原因。兩個選擇可以相同，也可以不同，但都要從正式方法中選擇。"],
+      18:["請回想剛剛完成魚骨圖的過程，寫下你的反思。","可以想一想：魚骨圖有沒有幫助你看見問題背後的原因？在小組整理、投票或討論的過程中，你有沒有發現新的想法？"],
+      19:["這是你們完成的雙向魚骨圖成果。請一起看看主要問題、原因、決策目標、方法、方案選擇，以及剛剛整理出的反思摘要。","確認後，可以匯出圖片或文字成果，作為這次活動的紀錄。"]
     };
     const colors=["#276EF1","#00A676","#D95D39","#7B61FF","#B7791F","#008C95"];
     const risks=["自殺","自傷","傷害自己","不想活","傷人","殺人","暴力","性侵","性暴力","虐待","威脅","勒索","跟蹤","霸凌","不安全","家暴"];
-    let S={step:0,mode:"group",roomCode:"",createdRoom:"",selfId:"self",nameDraft:"",joined:false,autoTts:true,ttsReady:false,lastSpokenStep:0,recordingBy:"",confirmBy:{grouping:"",selected:"",problem:"",right:"",goal:"",outcome:"",feasible:"",reflection:""},sources:[{id:"self",name:"尚未加入",color:colors[0],system:false,joined:false},{id:"group",name:"小組提出",color:"#46515f",system:true,joined:true},{id:"unknown",name:"未指定",color:"#8a8f98",system:true,joined:false}],active:"self",distresses:[],distressesVersion:0,deletedDistressIds:[],topics:[{id:"t1",name:"主題 A"},{id:"t2",name:"主題 B"}],draftTopics:[{id:"dt1",name:"主題 A"},{id:"dt2",name:"主題 B"}],draftAssignments:{},groupProposals:[],groupingVotes:{},groupingVersion:0,groupConfirmVotes:{},groupingOwnConcern:false,groupingConfirmed:"",selectedCandidate:"",problemVotes:{},problemVoteVersion:0,selected:"",problem:"",problemOk:false,problemDetails:[],problemDetailsVersion:0,problemDraft:"",problemDraftHold:false,problemDraftUpdated:false,problemDraftVotes:{},problemRevisionNotes:[],causes:[],causesVersion:0,deletedCauseIds:[],cats:[{id:"c1",name:"大要因 1"},{id:"c2",name:"大要因 2"}],draftCats:[{id:"dc1",name:"大要因 1"},{id:"dc2",name:"大要因 2"}],draftCauseAssignments:{},causeClassProposals:[],causeClassVotes:{},causeClassVersion:0,causeClassConfirmed:"",rightOk:false,rightVotes:{},rightVoteVersion:0,rightNeedsRevision:false,goal:"",goalIdeas:[],goalIdeasVersion:0,goalDraft:"",goalDraftHold:false,goalDraftUpdated:false,goalDraftVotes:{},priority:[],priorityOpen:true,stash:[],methods:[],methodsVersion:0,deletedMethodIds:[],draftMethodCats:[{id:"dmc1",name:"大方法 1"},{id:"dmc2",name:"大方法 2"}],draftMethodAssignments:{},methodClassProposals:[],methodClassVotes:{},methodClassVersion:0,methodClassConfirmed:"",outcomeOk:false,outcomeVotes:{},outcomeVoteVersion:0,outcomeNeedsRevision:false,solutionVotes:{},solutionVoteVersion:0,solutionTie:false,feasible:"",feasibleReason:"",unique:"",uniqueReason:"",reflections:[],reflectionsVersion:0,reflectionSummary:"",reflectionSummaryOk:false,reflection:""};
+    let S={step:0,mode:"group",roomCode:"",createdRoom:"",selfId:"self",nameDraft:"",joined:false,autoTts:true,ttsReady:false,lastSpokenStep:0,recordingBy:"",confirmBy:{grouping:"",selected:"",problem:"",right:"",goal:"",outcome:"",feasible:"",reflection:""},sources:[{id:"self",name:"尚未加入",color:colors[0],system:false,joined:false},{id:"group",name:"小組提出",color:"#46515f",system:true,joined:true},{id:"unknown",name:"未指定",color:"#8a8f98",system:true,joined:false}],active:"self",distresses:[],distressesVersion:0,deletedDistressIds:[],topics:[{id:"t1",name:"主題 A"},{id:"t2",name:"主題 B"}],draftTopics:[{id:"dt1",name:"主題 A"},{id:"dt2",name:"主題 B"}],draftAssignments:{},groupProposals:[],groupingVotes:{},groupingVersion:0,groupConfirmVotes:{},groupingOwnConcern:false,groupingConfirmed:"",selectedCandidate:"",problemVotes:{},problemVoteVersion:0,selected:"",problem:"",problemOk:false,problemDetails:[],problemDetailsVersion:0,deletedProblemDetailIds:[],problemDraft:"",problemDraftHold:false,problemDraftUpdated:false,problemDraftVotes:{},problemRevisionNotes:[],causes:[],causesVersion:0,deletedCauseIds:[],cats:[{id:"c1",name:"大要因 1"},{id:"c2",name:"大要因 2"}],draftCats:[{id:"dc1",name:"大要因 1"},{id:"dc2",name:"大要因 2"}],draftCauseAssignments:{},causeClassProposals:[],causeClassVotes:{},causeClassVersion:0,causeClassConfirmed:"",rightOk:false,rightVotes:{},rightVoteVersion:0,rightNeedsRevision:false,goal:"",goalIdeas:[],goalIdeasVersion:0,deletedGoalIdeaIds:[],goalDraft:"",goalDraftHold:false,goalDraftUpdated:false,goalDraftVotes:{},priority:[],priorityOpen:true,stash:[],methods:[],methodsVersion:0,deletedMethodIds:[],draftMethodCats:[{id:"dmc1",name:"大方法 1"},{id:"dmc2",name:"大方法 2"}],draftMethodAssignments:{},methodClassOwnerBaselines:{},methodClassProposals:[],methodClassVotes:{},methodClassVersion:0,methodClassConfirmed:"",outcomeOk:false,outcomeVotes:{},outcomeVoteVersion:0,outcomeNeedsRevision:false,solutionVotes:{},solutionVoteVersion:0,solutionTie:false,feasible:"",feasibleReason:"",unique:"",uniqueReason:"",reflections:[],reflectionsVersion:0,reflectionSummary:"",reflectionSummaryOk:false,reflection:"",revoteGates:{},revoteGateVersion:0};
     const tabUserId=sessionStorage.getItem("fishboneUserId")||("u-"+Date.now()+"-"+Math.random().toString(16).slice(2));sessionStorage.setItem("fishboneUserId",tabUserId);S.selfId=tabUserId;S.active=tabUserId;S.sources[0].id=tabUserId;
-    const roomPrefix="fishbone-room-v2:";let syncMuted=false;const roomChannel=("BroadcastChannel" in window)?new BroadcastChannel("fishbone-room-v2"):null;
+    /* PostgreSQL/API is the only room authority. Browser storage is reserved for
+       this tab's opaque reconnect credential and never relays room snapshots. */
+    const roomPrefix="fishbone-room-v2:";let syncMuted=false;const roomChannel=null;
     const $=id=>document.getElementById(id), uid=p=>p+"-"+Date.now()+"-"+Math.random().toString(16).slice(2), esc=s=>(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
     const src=id=>S.sources.find(s=>s.id===id)||S.sources.find(s=>s.id==="unknown");
     function renameSource(id,value){src(id).name=value;document.querySelectorAll(`[data-source-id="${id}"]`).forEach(el=>el.textContent=value)}

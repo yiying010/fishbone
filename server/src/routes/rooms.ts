@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { Readable } from "node:stream";
 import { assertSnapshot, withoutNul } from "../domain/snapshot.ts";
 import { formatRoomCode, normalizeRoomCode } from "../rooms/codes.ts";
 import { normalizeMemberId } from "../rooms/member-id.ts";
@@ -35,15 +36,39 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
    * route: joining an unknown code fails rather than bringing one into being,
    * so no code is ever chosen by a person.
    */
-  app.post("/api/rooms", async (request, reply) => {
+  app.post("/api/rooms", {
+    // Fastify rejects an empty application/json payload before the route
+    // handler. Old clients may still send that header on an otherwise empty
+    // creation request, so turn only an explicitly zero-byte body into {} and
+    // leave Fastify's normal JSON parser in charge of every non-empty body.
+    preParsing: (request, _reply, payload, done) => {
+      const contentType = String(request.headers["content-type"] ?? "").toLowerCase();
+      if (contentType.startsWith("application/json") && request.headers["content-length"] === "0") {
+        // The built-in parser honours Content-Length while consuming the
+        // replacement stream, so keep the header consistent with `{}`.
+        request.headers["content-length"] = "2";
+        request.raw.headers["content-length"] = "2";
+        done(null, Readable.from(["{}"]));
+        return;
+      }
+      done(null, payload);
+    },
+  }, async (request, reply) => {
     const overall = limiters.requests?.take(request.ip);
     if (overall && !overall.allowed) return rateLimited(reply, overall.retryAfterSeconds);
     const creates = limiters.roomCreates?.take(request.ip);
     if (creates && !creates.allowed) return rateLimited(reply, creates.retryAfterSeconds);
 
-    const code = await store.createRoom(config.roomCodeLength);
+    // Room creation historically accepts an empty POST. Keep that compatible
+    // with cached clients and probes that do not send JSON at all.
+    if (request.body !== undefined) requestBody(request);
+    const created = await store.createRoom(config.roomCodeLength);
     reply.code(201).header("cache-control", "no-store");
-    return { room: code, displayCode: formatRoomCode(code) };
+    return {
+      room: created.code,
+      displayCode: formatRoomCode(created.code),
+      members: [],
+    };
   });
 
   app.post("/api/rooms/:code/join", async (request, reply) => {
@@ -93,22 +118,45 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
     // Stops an intermediate nginx from buffering a held response.
     reply.header("x-accel-buffering", "no");
 
-    const first = await store.read(roomCode);
+    const first = await store.readSummary(roomCode);
     if (first === null) return roomNotFound(request, reply, limiters);
+    const memberStep = first.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? first.currentStep;
     if (!hasSince || first.revision !== since) {
-      return { room: roomCode, ...first };
+      const full = await store.read(roomCode);
+      if (full === null) return roomNotFound(request, reply, limiters);
+      return {
+        room: roomCode,
+        ...full,
+        currentStep: full.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? full.currentStep,
+      };
     }
     if (!wantsHold) {
-      return { room: roomCode, revision: first.revision, currentStep: first.currentStep, unchanged: true };
+      return {
+        room: roomCode,
+        revision: first.revision,
+        currentStep: memberStep,
+        members: first.members,
+        unchanged: true,
+      };
     }
 
     const changed = await holdUntilRoomChanges(request, roomCode, since, deps);
     if (!changed) {
-      return { room: roomCode, revision: since, currentStep: first.currentStep, unchanged: true };
+      return {
+        room: roomCode,
+        revision: since,
+        currentStep: memberStep,
+        members: first.members,
+        unchanged: true,
+      };
     }
     const latest = await store.read(roomCode);
     if (latest === null) return roomNotFound(request, reply, limiters);
-    return { room: roomCode, ...latest };
+    return {
+      room: roomCode,
+      ...latest,
+      currentStep: latest.members.find((entry) => entry.memberId === member.memberId)?.currentStep ?? latest.currentStep,
+    };
   });
 
   app.post("/api/rooms/:code/state", async (request, reply) => {

@@ -29,6 +29,10 @@
     function loadRoomToken(code){try{return sessionStorage.getItem(roomTokenKey(code))||""}catch(e){return ""}}
     function saveRoomToken(code,token){try{if(token)sessionStorage.setItem(roomTokenKey(code),token)}catch(e){}}
     function clearRoomToken(code){try{sessionStorage.removeItem(roomTokenKey(code))}catch(e){}}
+    const ROOM_CONTEXT_KEY="fishboneRoomContext";
+    function saveRoomContext(){try{sessionStorage.setItem(ROOM_CONTEXT_KEY,JSON.stringify({roomCode:canonRoomCode(S.roomCode),name:String(S.nameDraft||src(S.selfId).name||"")}))}catch(e){}}
+    function loadRoomContext(){try{let data=JSON.parse(sessionStorage.getItem(ROOM_CONTEXT_KEY)||"null"),room=canonRoomCode((data||{}).roomCode),name=String((data||{}).name||"").trim();return room&&name?{roomCode:room,name}:null}catch(e){return null}}
+    function clearRoomContext(){try{sessionStorage.removeItem(ROOM_CONTEXT_KEY)}catch(e){}}
     function syncHeaders(sendsJson){let h={accept:"application/json"};if(sendsJson)h["content-type"]="application/json";if(SYNC.token)h["authorization"]="Bearer "+SYNC.token;return h}
     /* Postgres stores the snapshot as jsonb, which does not preserve key order, so
        "did anything actually change" has to be asked of a canonical form.
@@ -39,18 +43,86 @@
        two would push at each other for the whole lesson. Only this comparison
        ignores order; what is actually sent keeps the local order untouched. */
     function canonJson(v){if(v===undefined)return "null";if(v===null||typeof v!=="object")return JSON.stringify(v);if(Array.isArray(v)){let parts=v.map(canonJson);if(v.every(x=>x&&typeof x==="object"&&!Array.isArray(x)&&typeof x.id==="string"))parts.sort();return "["+parts.join(",")+"]"}return "{"+Object.keys(v).sort().filter(k=>v[k]!==undefined).map(k=>JSON.stringify(k)+":"+canonJson(v[k])).join(",")+"}"}
+    /* Hydrate adds metadata that belongs to the server's relational projection,
+       not to the browser snapshot. Compare only the client-owned shape on both
+       sides, otherwise every repaint treats an unchanged room as dirty. */
+    function serverSnapshotJson(snapshot){let remote=snapshot||{},data={};Object.keys(sharedSnapshot()).forEach(key=>{data[key]=remote[key]});return canonJson(data)}
     function syncSleep(ms){return new Promise(r=>setTimeout(r,ms))}
     function retryAfterMs(res){let header=Number(res.headers.get("retry-after"));return Math.min(60000,Math.max(1000,(Number.isFinite(header)&&header>0?header:5)*1000))}
     function syncOnlineText(){return "已連上小組伺服器，其他裝置的更新會自動出現。"}
     function setSyncStatus(connected,msg){SYNC.connected=connected;SYNC.status=msg;let el=$("syncStatus");if(el){el.textContent=msg;el.className=connected?"syncNote ok":"syncNote"}}
-    function applyRemote(data){if(!data)return;syncMuted=true;try{mergeRoom(data);autoAdvanceFromShared();render()}finally{syncMuted=false}}
+    function applyRoomPolicy(data){
+      if(!data)return false;let changed=false;
+      if(Array.isArray(data.members))data.members.forEach((member,index)=>{
+        if(!member||!member.memberId)return;
+        let source=S.sources.find(s=>s.id===member.memberId),name=String(member.displayName||member.name||"");
+        if(source){if(name&&source.name!==name){source.name=name;changed=true}if(!source.joined){source.joined=true;changed=true}}
+        else{S.sources.splice(Math.max(0,S.sources.length-2),0,{id:member.memberId,name:name||"未命名成員",color:colors[(joinedMembers().length+index)%colors.length],system:false,joined:true});changed=true}
+      });
+      return changed;
+    }
+    /* An unchanged long-poll reply still carries member metadata. That source
+       list is server-owned, so acknowledge just it without masking a pending
+       local card or vote edit in the rest of the snapshot. */
+    function acknowledgeMemberSources(data){
+      if(!Array.isArray(data&&data.members))return;
+      try{let snapshot=JSON.parse(SYNC.serverJson||"{}");snapshot.sources=plain(S.sources);SYNC.serverJson=canonJson(snapshot)}catch(e){}
+    }
+    /* Remote data may merge immediately, but repainting while an input, textarea
+       or native select is active would destroy its value, focus, caret or open
+       picker. Defer only the paint; the next local command still reads the live
+       control before its own render. */
+    let remotePaintPending=false,imeComposing=false,remoteDraftSnapshot=null;
+    function activeDraftControl(){let el=document.activeElement;return el&&["INPUT","TEXTAREA","SELECT"].includes(el.tagName)&&el.id?el:null}
+    function captureRemoteDraft(){let el=activeDraftControl();if(!el)return null;let snap={id:el.id,step:S.step,value:el.type==="checkbox"?!!el.checked:el.value,start:null,end:null};if(typeof el.selectionStart==="number"){snap.start=el.selectionStart;snap.end=el.selectionEnd}return snap}
+    function restoreRemoteDraft(snap){if(!snap||snap.step!==S.step)return;let el=$(snap.id);if(!el)return;if(el.type==="checkbox")el.checked=!!snap.value;else el.value=snap.value;if(typeof el.setSelectionRange==="function"&&snap.start!==null){let len=String(el.value||"").length;el.setSelectionRange(Math.min(snap.start,len),Math.min(snap.end,len))}}
+    function flushRemotePaint(){if(!remotePaintPending||imeComposing||activeDraftControl())return;let snap=remoteDraftSnapshot;remotePaintPending=false;remoteDraftSnapshot=null;let muted=syncMuted;syncMuted=true;try{render();restoreRemoteDraft(snap)}finally{syncMuted=muted}}
+    document.addEventListener("compositionstart",e=>{if(e.target&&["INPUT","TEXTAREA"].includes(e.target.tagName)){imeComposing=true;remoteDraftSnapshot=captureRemoteDraft()||remoteDraftSnapshot}},true);
+    document.addEventListener("compositionend",()=>{imeComposing=false;setTimeout(flushRemotePaint,0)},true);
+    document.addEventListener("focusout",()=>setTimeout(flushRemotePaint,0),true);
+    /* A focused field may render its card during blur/change. Without preserving
+       the intended button activation, that render removes the original button
+       before its click fires, so the user has to click a second time. */
+    let pendingDraftButtonActivation=null;
+    function isDraftControl(el){return !!(el&&["INPUT","TEXTAREA","SELECT"].includes(el.tagName)&&el.id)}
+    document.addEventListener("pointerdown",e=>{
+      let button=e.target&&e.target.closest?e.target.closest("button"):null,control=document.activeElement;
+      if(!button||button.disabled||!isDraftControl(control)||control===button)return;
+      if(remotePaintPending)remoteDraftSnapshot=captureRemoteDraft()||remoteDraftSnapshot;
+      pendingDraftButtonActivation={button,control,step:Number(S.step),id:button.id||"",action:button.getAttribute("onclick")||"",text:button.textContent||""};
+      e.preventDefault();
+    },true);
+    document.addEventListener("click",e=>{
+      let pending=pendingDraftButtonActivation,button=e.target&&e.target.closest?e.target.closest("button"):null;
+      if(!pending||button!==pending.button)return;
+      pendingDraftButtonActivation=null;e.preventDefault();e.stopImmediatePropagation();
+      if(pending.control&&typeof pending.control.blur==="function")pending.control.blur();
+      setTimeout(()=>{
+        if(Number(S.step)!==pending.step||imeComposing)return;
+        let target=pending.button.isConnected?pending.button:[...document.querySelectorAll("button")].find(b=>!b.disabled&&(pending.id&&b.id===pending.id||pending.action&&b.getAttribute("onclick")===pending.action&&(b.textContent||"")===pending.text));
+        if(target&&!target.disabled)target.click();
+      },0);
+    },true);
+    document.addEventListener("pointercancel",()=>{pendingDraftButtonActivation=null},true);
+    function applyAuthoritativeProgress(currentStep){let step=Number(currentStep);if(!Number.isFinite(step)||step<0||S.reviewingStep)return;if(S.revisionMode&&typeof revisionOfficialStep==="function"){S.step=Number(revisionOfficialStep())||S.step;return}S.step=Math.max(S.step,Math.min(19,Math.trunc(step)))}
+    function applyRemote(data,currentStep){
+      if(!data)return;syncMuted=true;
+      try{
+        let draft=captureRemoteDraft();if(draft)remoteDraftSnapshot=draft;
+        mergeRoom(data);
+        applyAuthoritativeProgress(currentStep);
+        autoAdvanceFromShared();
+        if(imeComposing||activeDraftControl()){remotePaintPending=true;return}
+        render();remotePaintPending=false;remoteDraftSnapshot=null;
+      }finally{syncMuted=false}
+    }
     /* The room is gone from the server: deleted by a teacher, or purged by the
        retention sweep. Stop the session rather than re-joining, because a
        re-join would recreate the room and the next push would upload the whole
        snapshot again, quietly undoing a deletion that was meant to be final.
        Rejoining from Step 1 stays available as a deliberate choice. */
     function roomGone(){
-      clearRoomToken(S.roomCode);SYNC.session=0;SYNC.token="";
+      clearRoomToken(S.roomCode);clearRoomContext();SYNC.session=0;SYNC.token="";
       if(SYNC.pushTimer){clearTimeout(SYNC.pushTimer);SYNC.pushTimer=null}
       SYNC.pushAgain=false;
       setSyncStatus(false,"這個房間在伺服器上已不存在，可能已被移除或超過保存期限。目前內容仍留在這台裝置，若要繼續請回到 Step 1 重新加入。");
@@ -73,18 +145,15 @@
            missing room and a mistyped one without saying which. */
         if(res.status===404||res.status===400){SYNC.session=0;setSyncStatus(false,"找不到這個房間碼。");return "not-found"}
         if(res.status===429){SYNC.session=0;setSyncStatus(false,"嘗試次數過多，請稍候再試。");return "rate-limited"}
-        /* 409 means this member id belongs to a session this tab cannot prove it
-           owns, which for a student is another device already in the room under
-           the same identity, not a bad room code. */
         if(res.status===409){SYNC.session=0;setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();
         if(SYNC.session!==session)return "error";
-        SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);
+        SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);saveRoomContext();
         // Anything the caller wants merged before the server's snapshot lands.
         if(beforeApply)beforeApply();
-        SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});SYNC.failures=0;
-        applyRemote(data.snapshot);
+        applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);SYNC.failures=0;
+        applyRemote(data.snapshot,data.currentStep);
         setSyncStatus(true,syncOnlineText());
         pollLoop(session);schedulePush();
         return "ok";
@@ -96,6 +165,14 @@
         if(!initial)setTimeout(()=>{if(SYNC.session===session&&S.joined)connectRoom()},Math.min(15000,800*Math.pow(2,Math.min(5,SYNC.failures))));
         return "error";
       }
+    }
+    async function restoreRoomSession(){
+      let saved=loadRoomContext();if(!saved||!loadRoomToken(saved.roomCode))return false;
+      S.step=1;S.roomCode=saved.roomCode;S.createdRoom=showRoomCode(saved.roomCode);S.nameDraft=saved.name;S.joined=true;S.active=S.selfId;render();
+      let outcome=await connectRoom(true,()=>{ensureSource(S.selfId,saved.name,colors[joinedMembers().length%colors.length]);S.active=S.selfId});
+      if(outcome==="ok"){S.step=Math.max(2,S.step);S.reviewingStep=0;render();schedulePush();return true}
+      if(outcome!=="error"){clearRoomToken(saved.roomCode);clearRoomContext();S.joined=false;S.roomCode="";S.createdRoom="";S.step=0;render()}
+      return false;
     }
     /* A 404 on a running session means either the room is gone or this token is
        no longer valid; the server answers both identically on purpose. Asking to
@@ -109,8 +186,8 @@
         if(!res.ok)return false;
         let data=await res.json();
         if(SYNC.session!==session)return false;
-        SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);SYNC.revision=data.revision||0;SYNC.serverJson=canonJson(data.snapshot||{});
-        applyRemote(data.snapshot);
+        SYNC.token=data.token||"";saveRoomToken(S.roomCode,SYNC.token);applyRoomPolicy(data);SYNC.revision=data.revision||0;SYNC.serverJson=serverSnapshotJson(data.snapshot);
+        applyRemote(data.snapshot,data.currentStep);
         return true;
       }catch(e){return false}
     }

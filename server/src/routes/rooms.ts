@@ -12,6 +12,7 @@ import {
 import { registerAdminRoomRoutes } from "./admin-rooms.ts";
 import {
   authenticateRoom,
+  bearerToken,
   displayName,
   gateRoomRequest,
   rateLimited,
@@ -59,6 +60,7 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
       displayName(payload["name"]),
       roomStep(payload["step"]),
       config.sessionTtlHours,
+      bearerToken(request),
     );
     if (joined === null) return roomNotFound(request, reply, limiters);
 
@@ -221,7 +223,13 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
       }
       if (error instanceof AiProviderError) {
         const invalid = error.kind === "invalid_output";
-        request.log.warn({ outcome: error.kind }, "AI review failed");
+        // `error.message` is the only thing that separates a revoked key or a
+        // mistyped model name from a real outage; without it every failure is
+        // one indistinguishable line and operators are told to wait for a
+        // request that can never succeed. It is provider metadata, never
+        // provider content, so it is safe to log and still not sent to the
+        // browser.
+        request.log.warn({ outcome: error.kind, reason: error.message }, "AI review failed");
         reply.code(invalid ? 502 : 503);
         return {
           error: invalid ? "ai_invalid_output" : "ai_temporarily_unavailable",

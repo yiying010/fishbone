@@ -46,6 +46,7 @@ export function assertSnapshot(value: unknown, maxBytes: number): Snapshot {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new SnapshotError("snapshot must be a JSON object");
   }
+  assertSnapshotStructure(value);
   const serialized = JSON.stringify(value);
   const size = Buffer.byteLength(serialized, "utf8");
   if (size > maxBytes) {
@@ -60,6 +61,79 @@ export function assertSnapshot(value: unknown, maxBytes: number): Snapshot {
   // wedge the room on a 500 that never clears, so strip it instead.
   const clean = serialized.includes("\\u0000") ? (stripNulls(value) as Snapshot) : (value as Snapshot);
   return clean;
+}
+
+/*
+ * Snapshots are rendered by a legacy single-file client that uses identifiers
+ * in DOM ids and inline event handlers.  Student text is escaped before it is
+ * rendered, but an arbitrary card/member/category id cannot safely be placed
+ * in those attribute contexts.  Keep identifiers deliberately boring at the
+ * trust boundary instead of trying to remember every rendering call site.
+ *
+ * The iterative walk also puts a ceiling on nesting before JSON.stringify or
+ * NUL cleanup can exhaust the JS call stack.
+ */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,200}$/;
+const SAFE_COLOR = /^#[0-9A-Fa-f]{6}$/;
+const ID_FIELDS = new Set(["id", "source", "createdBy", "updatedBy", "memberId", "catId", "groupId", "from"]);
+const ID_ARRAY_FIELDS = new Set(["ids", "causes", "priority", "deletedDistressIds", "deletedCauseIds", "deletedMethodIds"]);
+const ID_MAP_FIELDS = new Set([
+  "confirmBy",
+  "draftAssignments",
+  "draftCauseAssignments",
+  "draftMethodAssignments",
+  "groupingVotes",
+  "groupConfirmVotes",
+  "problemVotes",
+  "problemDraftVotes",
+  "causeClassVotes",
+  "rightVotes",
+  "goalDraftVotes",
+  "methodClassVotes",
+  "outcomeVotes",
+  "outcomeRevisionVotes",
+  "solutionVotes",
+]);
+
+function assertSafeId(value: unknown, field: string): void {
+  if (typeof value !== "string" || !SAFE_ID.test(value)) {
+    throw new SnapshotError(`${field} must contain only letters, digits, _ or -`);
+  }
+}
+
+function assertSnapshotStructure(root: object): void {
+  const pending: { value: unknown; depth: number; field: string }[] = [{ value: root, depth: 0, field: "snapshot" }];
+  let nodes = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    if (current.depth > 64) throw new SnapshotError("snapshot is nested too deeply");
+    nodes += 1;
+    if (nodes > 20_000) throw new SnapshotError("snapshot has too many values");
+    if (Array.isArray(current.value)) {
+      for (const child of current.value) pending.push({ value: child, depth: current.depth + 1, field: current.field });
+      continue;
+    }
+    if (current.value === null || typeof current.value !== "object") continue;
+    for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
+      if (ID_FIELDS.has(key)) assertSafeId(child, key);
+      if (key === "color" && (typeof child !== "string" || !SAFE_COLOR.test(child))) {
+        throw new SnapshotError("color must be a #RRGGBB value");
+      }
+      if (ID_ARRAY_FIELDS.has(key)) {
+        if (!Array.isArray(child)) throw new SnapshotError(`${key} must be an array`);
+        // One of these names carries both shapes: `causes` is a list of cause
+        // ids on a method card and a list of cause objects at the top level.
+        // Only the strings are identifiers; an object element is walked like
+        // any other node below, which reaches its own id and color fields.
+        for (const entry of child) if (typeof entry === "string") assertSafeId(entry, key);
+      }
+      if (ID_MAP_FIELDS.has(key) && child !== null && typeof child === "object" && !Array.isArray(child)) {
+        for (const mapKey of Object.keys(child as Record<string, unknown>)) assertSafeId(mapKey, key);
+      }
+      pending.push({ value: child, depth: current.depth + 1, field: key });
+    }
+  }
 }
 
 const NUL = String.fromCharCode(0);

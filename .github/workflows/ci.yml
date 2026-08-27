@@ -1,0 +1,83 @@
+# Every check this project has lives in `npm test`; this runs it where nobody
+# can forget to.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, site-deployment]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    services:
+      # Matches the image docker-compose.yml deploys, so a difference between
+      # what passes here and what runs in production is not a Postgres version.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: fishbone_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d fishbone_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The floor package.json declares. Kept as a plain version rather than
+          # a range so an upgrade is a visible edit.
+          node-version: '22.18.0'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        env:
+          TEST_DATABASE_URL: postgres://test:test@127.0.0.1:5432/fishbone_test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt
+
+      # `npm test` passes with the database-backed suites skipped, which is how
+      # they went unrun for a long time. A green run that proved nothing is the
+      # failure this job exists to prevent, so require that nothing skipped.
+      - name: Require the full suite to have run
+        run: |
+          if ! grep -qx '# skipped 0' test-output.txt; then
+            echo "::error::Part of the suite did not run. CI must execute every test, including the ones that need a database."
+            grep -E '^# (tests|pass|fail|skipped)' test-output.txt || true
+            exit 1
+          fi
+          grep -E '^# (tests|pass|fail|skipped)' test-output.txt
+
+  image:
+    name: Image builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Dockerfile is the deployment artefact. Nothing else in CI compiles
+      # it, so a break here would only surface on the deployment host.
+      - name: Build the runtime image
+        run: docker build --tag fishbone-ci-check .

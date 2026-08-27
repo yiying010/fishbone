@@ -15,6 +15,7 @@ import { RateLimiter } from "../../build/rate-limit.js";
 import { assertSnapshot, clampRound, readItems, readSources, readVotes } from "../../build/domain/snapshot.js";
 import {
   AiProviderError,
+  AiRateLimitError,
   AiRequestError,
   AiReviewService,
   OpenAiReviewClient,
@@ -108,6 +109,52 @@ test("a payload that is not a room snapshot is refused", () => {
   assert.throws(() => assertSnapshot([], 1000), /must be a JSON object/);
   assert.throws(() => assertSnapshot({}, 1000), /missing the sources array/);
   assert.throws(() => assertSnapshot({ sources: [], pad: "x".repeat(2000) }, 1000), /limit is 1000/);
+});
+
+test("snapshot identifiers and colors cannot become executable DOM attributes", () => {
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1\" onclick=alert(1)", name: "x" }] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1", color: "red\" onmouseenter=alert(1)" }] }, 100_000),
+    /#RRGGBB/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], groupingVotes: { "u1\" onclick=alert(1)": "p1" } }, 100_000),
+    /letters, digits, _ or -/,
+  );
+});
+
+test("a field name that carries both an id list and an object list is checked as each", () => {
+  // `causes` is cause cards at the top level and cause ids on a method card.
+  const accepted = assertSnapshot({
+    sources: [{ id: "u1", name: "小安" }],
+    causes: [{ id: "c1", text: "沒有記錄習慣", createdBy: "u1" }],
+    methods: [{ id: "m1", text: "設提醒", causes: ["c1"] }],
+  }, 100_000);
+  assert.equal(accepted.causes[0].id, "c1");
+  assert.throws(
+    () => assertSnapshot({
+      sources: [{ id: "u1" }],
+      methods: [{ id: "m1", causes: ["c1' onclick=alert(1)"] }],
+    }, 100_000),
+    /letters, digits, _ or -/,
+  );
+  assert.throws(
+    () => assertSnapshot({ sources: [{ id: "u1" }], causes: [{ id: "c1\" onclick=alert(1)" }] }, 100_000),
+    /letters, digits, _ or -/,
+  );
+});
+
+test("excessive snapshot nesting is refused before serialization can exhaust the stack", () => {
+  const snapshot = { sources: [] };
+  let cursor = snapshot;
+  for (let depth = 0; depth < 65; depth += 1) {
+    cursor.nested = {};
+    cursor = cursor.nested;
+  }
+  assert.throws(() => assertSnapshot(snapshot, 100_000), /nested too deeply/);
 });
 
 test("U+0000 is stripped so a pasted NUL cannot wedge a room on a jsonb error", () => {
@@ -227,6 +274,60 @@ test("step19 drops a stale feasible/unique method reference instead of leaking i
   assert.doesNotMatch(JSON.stringify(step19), /m-removed/);
 });
 
+test("a card owned by the group is reviewable, matching the client's own edit rule", () => {
+  // actor() answers "group" until the student joins a room, so anything written
+  // while working alone carries createdBy "group". canEditCard() offers every
+  // action on such a card; refusing the review of it would be a 403 the student
+  // has no way to resolve.
+  const snapshot = {
+    sources: [],
+    problem: "作業遲交",
+    causes: [
+      { id: "c1", text: "加入前寫下的原因", createdBy: "group" },
+      { id: "c2", text: "沒有作者的原因" },
+      { id: "c3", text: "別人的原因", createdBy: "u2" },
+    ],
+  };
+  assert.equal(extractAiInput("step8_cause", "c1", snapshot, "u1", 12_000).content.cause_card, "加入前寫下的原因");
+  assert.equal(extractAiInput("step8_cause", "c2", snapshot, "u1", 12_000).content.cause_card, "沒有作者的原因");
+  // A card that names another member is still off limits.
+  assert.throws(
+    () => extractAiInput("step8_cause", "c3", snapshot, "u1", 12_000),
+    (error) => error instanceof AiRequestError && error.code === "ai_item_forbidden",
+  );
+});
+
+test("an oversized step19 input is shortened rather than refused outright", () => {
+  const reflections = Array.from({ length: 12 }, (_, index) => ({
+    id: `r${index}`,
+    text: "反思".repeat(900),
+    createdBy: "u1",
+  }));
+  const snapshot = {
+    sources: [],
+    problem: "作業遲交",
+    goal: "準時完成",
+    causes: [],
+    methods: [],
+    reflections,
+  };
+  const step19 = extractAiInput("step19_reflection", undefined, snapshot, "u1", 12_000);
+  assert.equal(step19.content.texts_shortened, true);
+  assert.equal(step19.content.reflections.length, 12, "every reflection is kept, only shortened");
+  assert.ok(JSON.stringify(step19.content).length <= 12_000);
+  // Below the smallest cap it is still a refusal rather than an empty summary.
+  assert.throws(
+    () => extractAiInput("step19_reflection", undefined, snapshot, "u1", 300),
+    (error) => error instanceof AiRequestError && error.code === "ai_input_too_large",
+  );
+  // A room that fits is left alone and is not marked as shortened.
+  const small = extractAiInput("step19_reflection", undefined, {
+    ...snapshot,
+    reflections: [{ id: "r1", text: "短反思", createdBy: "u1" }],
+  }, "u1", 12_000);
+  assert.equal(small.content.texts_shortened, undefined);
+});
+
 test("OpenAI review uses strict structured output without storage or provider tools", async () => {
   let sent;
   const client = new OpenAiReviewClient({
@@ -274,6 +375,44 @@ test("invalid provider output is rejected and duplicate AI inputs share one call
     (error) => error instanceof AiProviderError && error.kind === "invalid_output",
   );
 
+  // String(["cause"]) is "cause", so an enum checked after coercion admits an
+  // array and then hands it back as the result. The contract promises a string.
+  const coerced = new OpenAiReviewClient({
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 5_000,
+    maxOutputTokens: 500,
+    fetchFn: async () => new Response(JSON.stringify({
+      output: [{ content: [{ type: "output_text", text: JSON.stringify({
+        classification: ["cause"],
+        reason: "理由",
+        clarification_question: null,
+      }) }] }],
+    }), { status: 200 }),
+  });
+  await assert.rejects(
+    coerced.generate({ task: "step8_cause", content: { confirmed_problem: "問題", cause_card: "原因" } }),
+    (error) => error instanceof AiProviderError && error.kind === "invalid_output",
+  );
+
+  // A run that hit max_output_tokens answers 200 with truncated text. Reporting
+  // that as malformed output points the operator at the wrong thing.
+  const truncated = new OpenAiReviewClient({
+    apiKey: "test-key",
+    model: "test-model",
+    timeoutMs: 5_000,
+    maxOutputTokens: 500,
+    fetchFn: async () => new Response(JSON.stringify({
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [{ content: [{ type: "output_text", text: '{"classification":"cau' }] }],
+    }), { status: 200 }),
+  });
+  await assert.rejects(
+    truncated.generate({ task: "step8_cause", content: { confirmed_problem: "問題", cause_card: "原因" } }),
+    (error) => error instanceof AiProviderError && /max_output_tokens/.test(error.message),
+  );
+
   let calls = 0;
   const fakeClient = {
     async generate() {
@@ -285,7 +424,10 @@ test("invalid provider output is rejected and duplicate AI inputs share one call
       };
     },
   };
-  const service = new AiReviewService({ client: fakeClient, requestsPerMemberPerMinute: 1 });
+  // Two concurrent requests now spend two tokens: the budget is taken before
+  // the cache and in-flight lookups, so it bounds requests and not merely
+  // provider calls. Coalescing into one provider call is what this asserts.
+  const service = new AiReviewService({ client: fakeClient, requestsPerMemberPerMinute: 2 });
   const input = { task: "step8_cause", content: { confirmed_problem: "問題", cause_card: "原因" } };
   const [first, second] = await Promise.all([
     service.review(1, "u1", input),
@@ -293,6 +435,34 @@ test("invalid provider output is rejected and duplicate AI inputs share one call
   ]);
   assert.equal(calls, 1);
   assert.equal(first.inputHash, second.inputHash);
+});
+
+test("a cached AI answer still costs the caller a request from their own budget", async () => {
+  let calls = 0;
+  const fakeClient = {
+    async generate() {
+      calls += 1;
+      return {
+        value: { classification: "cause", reason: "理由", clarification_question: null },
+        metadata: { providerRequestId: "resp", model: "test", latencyMs: 1, inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+  const service = new AiReviewService({ client: fakeClient, requestsPerMemberPerMinute: 2 });
+  const input = { task: "step8_cause", content: { confirmed_problem: "問題", cause_card: "原因" } };
+
+  await service.review(1, "u1", input);
+  // The cache key is room-wide, so without spending a token first, any member
+  // could replay a teammate's answer for the whole TTL for free.
+  const replay = await service.review(1, "u2", input);
+  assert.equal(calls, 1, "the replay is served from cache");
+  assert.equal(replay.result.classification, "cause");
+
+  await service.review(1, "u2", input);
+  await assert.rejects(
+    service.review(1, "u2", input),
+    (error) => error instanceof AiRateLimitError,
+  );
 });
 
 async function aiRouteApp({ member = { memberId: "u1", roomId: 1 }, revision = 7, revisions = [revision], snapshot, review }) {

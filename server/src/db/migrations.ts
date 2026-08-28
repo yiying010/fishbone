@@ -197,4 +197,13 @@ export const migrations: Migration[] = [
         drop column if exists deleted_version;
     `,
   },
+  {
+    id: "0007_drop_redundant_submission_index",
+    sql: /* sql */ `
+      -- Its columns are the primary key of submissions in the same order, and
+      -- nothing filters on deleted_at in SQL: the hydrate reads every row of a
+      -- room and decides liveness in TypeScript. It only cost every write.
+      drop index if exists submissions_live_room_kind_idx;
+    `,
+  },
 ];

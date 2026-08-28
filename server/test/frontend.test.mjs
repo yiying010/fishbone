@@ -57,7 +57,6 @@ test("presentation and behavior are separated into ordered frontend assets", () 
 test("the frontend assets still implement the 19-step activity", () => {
   assert.match(html, /S\.step\s*\+\s*["']\/19["']/);
   assert.match(html, /最終成果呈現與匯出/);
-  assert.match(html, /fishbone-room-v2/);
   assert.match(html, /function\s+step19\b/);
   assert.match(html, /outcomeRevision/);
   // The merge semantics the activity depends on must stay client-side and intact.

@@ -108,7 +108,7 @@ if (!databaseUrl) {
     "requestAiReview", "sharedSnapshot", "canonJson", "serverSnapshotJson", "loadRoomToken", "pushRoom",
     "applyUnchangedRoomPolicy",
     "runMethodAiCheck", "applyRemote", "renameDraftCat", "renameDraftMethodCat",
-    "submitCauseClass", "submitMethodClass",
+    "submitCauseClass", "submitMethodClass", "addSpoken", "removeDistress",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -329,6 +329,50 @@ if (!databaseUrl) {
     fresh.S.joined = true;
     assert.notEqual(fresh.S.selfId, owner.S.selfId);
     assert.equal(await fresh.connectRoom(true), "ok");
+  });
+
+  /*
+   * The delete happens before any authoritative reply has lifted
+   * distressesVersion to the timestamp scale the card itself uses, which is the
+   * state a tab is in for the first card it writes to a fresh room.
+   */
+  test("a card deleted straight after it was written does not come back for another tab", async () => {
+    const code = await newRoom();
+    const author = openTab();
+    author.S.roomCode = code;
+    author.S.nameDraft = "小安";
+    author.S.joined = true;
+    assert.equal(await author.connectRoom(true), "ok");
+    if (author.SYNC.pushTimer) clearTimeout(author.SYNC.pushTimer);
+    author.SYNC.pushTimer = null;
+    activateStubbedMember(author);
+
+    author.document.getElementById("newText").value = "我常常忘記作業期限";
+    author.addSpoken("distress");
+    const card = author.S.distresses[0];
+    assert.ok(card, `the card was rejected: ${author.shown()}`);
+    assert.ok(
+      Number(card.contentVersion) > Number(author.S.distressesVersion),
+      "the collection version has to still be below the card for this to be the case under test",
+    );
+    if (author.SYNC.pushTimer) clearTimeout(author.SYNC.pushTimer);
+    author.SYNC.pushTimer = null;
+    assert.equal(await author.pushRoom(), true);
+
+    author.removeDistress(card.id);
+    assert.deepEqual(author.S.distresses, []);
+    if (author.SYNC.pushTimer) clearTimeout(author.SYNC.pushTimer);
+    author.SYNC.pushTimer = null;
+    assert.equal(await author.pushRoom(), true);
+
+    const other = openTab();
+    other.S.roomCode = code;
+    other.S.nameDraft = "小美";
+    other.S.joined = true;
+    assert.equal(await other.connectRoom(true), "ok");
+    if (other.SYNC.pushTimer) clearTimeout(other.SYNC.pushTimer);
+    other.SYNC.pushTimer = null;
+    assert.deepEqual(other.S.distresses.map((item) => item.id), []);
   });
 
   function activateStubbedMember(tab) {

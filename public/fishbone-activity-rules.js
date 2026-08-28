@@ -2,6 +2,12 @@
     function suggestEdit(type,id){let note=prompt("請寫下想建議修改的地方：");if(note)alert("已收到修改建議。正式多人版會將建議送給原提出者或小組代表確認。")}
     function copyAsMine(type,id){if(!hasSpeaker()){remindSpeaker();return}let list=type==="distress"?S.distresses:type==="cause"?S.causes:S.methods,item=list.find(x=>x.id===id);if(!item)return;let speaker=actor(),now=Date.now(),base={id:uid(type[0]),text:item.text,source:speaker,createdBy:speaker,updatedBy:speaker,contentVersion:now};if(type==="distress"){S.distresses.push(base);S.distressesVersion=Math.max((S.distressesVersion||0)+1,now)}if(type==="cause"){S.causes.push({...base,status:"待確認",aiGuess:classifyCause(item.text).kind,catId:""});S.causesVersion=Math.max((S.causesVersion||0)+1,now)}if(type==="method"){S.methods.push({...base,big:"",status:"草稿",causes:[],effect:""});S.methodsVersion=Math.max((S.methodsVersion||0)+1,now)}render()}
     function nextContentVersion(x){return Math.max(Date.now(),Number((x||{}).contentVersion||0)+1)}
+    /* A deletion is published as an id in a collection plus the collection's
+       own version, and the server only hides a card whose content version the
+       tombstone clears. Card versions are wall-clock, so a collection version
+       that is only ever incremented by one stays below every card it holds and
+       the deletion is silently dropped. Always lift it past both. */
+    function nextCollectionVersion(current,item){return Math.max(Date.now(),Number(current||0)+1,Number((item||{}).contentVersion||0)+1)}
     function setUpdated(x){x.updatedBy=actor();x.contentVersion=nextContentVersion(x)}
     function markConfirm(key){S.confirmBy[key]=actor()}
     function confirmLine(key,label){return S.confirmBy[key]?`<p class="confirmMeta">${esc(label)}由 ${esc(src(S.confirmBy[key]).name)} 確認。</p>`:""}

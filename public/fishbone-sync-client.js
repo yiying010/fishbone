@@ -46,6 +46,10 @@
     /* Hydrate adds metadata that belongs to the server's relational projection,
        not to the browser snapshot. Compare only the client-owned shape on both
        sides, otherwise every repaint treats an unchanged room as dirty. */
+    /* Recomputed rather than cached on purpose: later scripts wrap
+       sharedSnapshot() and some of their fields only appear once the matching
+       state exists, so a cached key list would stop matching what schedulePush
+       compares against and every idle poll would look dirty. */
     function serverSnapshotJson(snapshot){let remote=snapshot||{},data={};Object.keys(sharedSnapshot()).forEach(key=>{data[key]=remote[key]});return canonJson(data)}
     function syncSleep(ms){return new Promise(r=>setTimeout(r,ms))}
     function retryAfterMs(res){let header=Number(res.headers.get("retry-after"));return Math.min(60000,Math.max(1000,(Number.isFinite(header)&&header>0?header:5)*1000))}
@@ -145,6 +149,9 @@
            missing room and a mistyped one without saying which. */
         if(res.status===404||res.status===400){SYNC.session=0;setSyncStatus(false,"找不到這個房間碼。");return "not-found"}
         if(res.status===429){SYNC.session=0;setSyncStatus(false,"嘗試次數過多，請稍候再試。");return "rate-limited"}
+        /* 409 means this member id belongs to a session this tab cannot prove it
+           owns, which for a student is another device already in the room under
+           the same identity, not a bad room code. */
         if(res.status===409){SYNC.session=0;setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();

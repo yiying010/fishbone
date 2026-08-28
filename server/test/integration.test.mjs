@@ -871,6 +871,140 @@ if (!databaseUrl) {
     assert.deepEqual(hydrated.snapshot.goalIdeas.map((item) => item.id), ["gi1"]);
   });
 
+  /*
+   * The browser versions a card with a wall-clock timestamp and the collection
+   * it lives in with a counter, and a deletion is published as the collection
+   * version. Comparing the two scales would drop the deletion and hydrate the
+   * card back for every other member.
+   */
+  test("a deletion still hides the card when the collection version is far below it", async () => {
+    const code = await newRoom();
+    const session = await joinRoom(code, "u1", "小安");
+    const created = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: 0,
+        snapshot: snapshot({
+          distresses: [{ id: "d1", text: "一", createdBy: "u1", contentVersion: Date.now() }],
+          distressesVersion: 1,
+        }),
+      },
+      auth(session.token),
+    );
+    assert.equal(created.statusCode, 200, created.body);
+
+    const removed = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: json(created).revision,
+        snapshot: snapshot({ distresses: [], distressesVersion: 2, deletedDistressIds: ["d1"] }),
+      },
+      auth(session.token),
+    );
+    assert.equal(removed.statusCode, 200, removed.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(session.token)));
+    assert.deepEqual(hydrated.snapshot.distresses.map((item) => item.id), []);
+    assert.deepEqual(hydrated.snapshot.deletedDistressIds, ["d1"]);
+  });
+
+  test("a member cannot tombstone another member's card by marking it deleted inline", async () => {
+    const code = await newRoom();
+    const owner = await joinRoom(code, "u1", "小安");
+    const other = await joinRoom(code, "u2", "小美");
+    const created = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: 0,
+        snapshot: snapshot({
+          distresses: [{ id: "d1", text: "小安的困擾", createdBy: "u1", contentVersion: 10 }],
+          distressesVersion: 10,
+        }),
+      },
+      auth(owner.token),
+    );
+    assert.equal(created.statusCode, 200, created.body);
+
+    const attempted = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: json(created).revision,
+        snapshot: snapshot({
+          distresses: [{ id: "d1", text: "", createdBy: "u1", contentVersion: 20, deletedAt: 20 }],
+          distressesVersion: 20,
+        }),
+      },
+      auth(other.token),
+    );
+    assert.equal(attempted.statusCode, 200, attempted.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(owner.token)));
+    assert.deepEqual(hydrated.snapshot.distresses.map((item) => item.id), ["d1"]);
+    assert.deepEqual(hydrated.snapshot.deletedDistressIds, []);
+  });
+
+  test("a tombstone for an id that does not exist cannot pre-empt a future card", async () => {
+    const code = await newRoom();
+    const owner = await joinRoom(code, "u1", "小安");
+    const other = await joinRoom(code, "u2", "小美");
+    const preempted = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: 0,
+        snapshot: snapshot({
+          distresses: [{ id: "d1", text: "", createdBy: "u1", contentVersion: 9_000_000, deletedAt: 1 }],
+          distressesVersion: 9_000_000,
+        }),
+      },
+      auth(other.token),
+    );
+    assert.equal(preempted.statusCode, 200, preempted.body);
+
+    const created = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: json(preempted).revision,
+        snapshot: snapshot({
+          distresses: [{ id: "d1", text: "小安的困擾", createdBy: "u1", contentVersion: 10 }],
+          distressesVersion: 10,
+        }),
+      },
+      auth(owner.token),
+    );
+    assert.equal(created.statusCode, 200, created.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(owner.token)));
+    assert.deepEqual(hydrated.snapshot.distresses.map((item) => item.text), ["小安的困擾"]);
+  });
+
+  test("a snapshot that both keeps and deletes the same card keeps it", async () => {
+    const code = await newRoom();
+    const session = await joinRoom(code, "u1", "小安");
+    const written = await post(
+      `/api/rooms/${code}/state`,
+      {
+        step: 2,
+        baseRevision: 0,
+        snapshot: snapshot({
+          distresses: [{ id: "d1", text: "一", createdBy: "u1", contentVersion: 10 }],
+          distressesVersion: 11,
+          deletedDistressIds: ["d1"],
+        }),
+      },
+      auth(session.token),
+    );
+    assert.equal(written.statusCode, 200, written.body);
+
+    const hydrated = json(await get(`/api/rooms/${code}/state`, auth(session.token)));
+    assert.deepEqual(hydrated.snapshot.distresses.map((item) => item.id), ["d1"]);
+  });
+
   test("the exported artifact is stored against the room", async () => {
     const code = await newRoom();
     const session = await joinRoom(code, "u1", "小安", 19);

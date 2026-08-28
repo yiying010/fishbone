@@ -1,8 +1,13 @@
 ﻿/**
  * The room snapshot is produced and merged entirely in the browser
- * (`sharedSnapshot()` / `mergeRoom()` in public/fishbone.html). The server
- * stores submitted JSONB as a compatibility base. Hydrate and conflict replies
- * replace projected official fields with the PostgreSQL-authoritative union.
+ * (`sharedSnapshot()` / `mergeRoom()` in public/fishbone.html), so the merge
+ * semantics the activity depends on stay in exactly one place.
+ *
+ * The server keeps the submitted JSONB as a compatibility base for the fields
+ * that have no relational projection yet, but hydrate and conflict replies
+ * replace every projected field with the PostgreSQL-authoritative union. A
+ * snapshot that one browser happens to hold is not evidence of what the room
+ * contains, so it cannot be handed back to another member as if it were.
  *
  * This module only does what a server must do regardless: reject input that is
  * not a snapshot at all, and read the parts needed for the relational

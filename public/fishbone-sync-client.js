@@ -55,15 +55,46 @@
     function retryAfterMs(res){let header=Number(res.headers.get("retry-after"));return Math.min(60000,Math.max(1000,(Number.isFinite(header)&&header>0?header:5)*1000))}
     function syncOnlineText(){return "已連上小組伺服器，其他裝置的更新會自動出現。"}
     function setSyncStatus(connected,msg){SYNC.connected=connected;SYNC.status=msg;let el=$("syncStatus");if(el){el.textContent=msg;el.className=connected?"syncNote ok":"syncNote"}}
+    /* Server-owned presence per member id, kept beside S rather than inside it:
+       S.sources is published in the shared snapshot, and a field the server
+       does not store there would make every hydrate look like a local change
+       and start exactly the push loop this design exists to avoid. */
+    let roomMemberPresence={};
+    function memberPresence(id){return roomMemberPresence[String(id)]||""}
+    /* "silent" still counts: the member has not answered for a while, but the
+       group has not decided to carry on without them. Only "excluded" does. */
+    function presenceCountsAsJoined(presence){return presence!=="excluded"&&presence!=="pending"}
     function applyRoomPolicy(data){
-      if(!data)return false;let changed=false;
-      if(Array.isArray(data.members))data.members.forEach((member,index)=>{
+      if(!data||!Array.isArray(data.members))return false;
+      let changed=false,next={};
+      data.members.forEach((member,index)=>{
         if(!member||!member.memberId)return;
-        let source=S.sources.find(s=>s.id===member.memberId),name=String(member.displayName||member.name||"");
-        if(source){if(name&&source.name!==name){source.name=name;changed=true}if(!source.joined){source.joined=true;changed=true}}
-        else{S.sources.splice(Math.max(0,S.sources.length-2),0,{id:member.memberId,name:name||"未命名成員",color:colors[(joinedMembers().length+index)%colors.length],system:false,joined:true});changed=true}
+        // An older server sends no presence at all; every member it lists joined.
+        let id=String(member.memberId),presence=String(member.presence||"joined"),joined=presenceCountsAsJoined(presence),name=String(member.displayName||member.name||"");
+        next[id]=presence;
+        if(presence!==memberPresence(id))changed=true;
+        let source=S.sources.find(s=>s.id===id);
+        if(source){if(name&&source.name!==name){source.name=name;changed=true}if(source.joined!==joined){source.joined=joined;changed=true}}
+        else{S.sources.splice(Math.max(0,S.sources.length-2),0,{id,name:name||"未命名成員",color:colors[(joinedMembers().length+index)%colors.length],system:false,joined});changed=true}
       });
+      roomMemberPresence=next;
       return changed;
+    }
+    /* Every completion gate waits for all the members who joined, so one device
+       that stops answering stops the whole group. The server decides whether
+       this is allowed; the client only offers it once the server has said the
+       member has gone quiet. */
+    async function markMemberAbsent(memberId){
+      if(!S.joined||!SYNC.session||!memberId||memberId===actor())return false;
+      try{
+        let res=await fetch(roomApi("members/"+encodeURIComponent(memberId)+"/absence"),{method:"POST",cache:"no-store",headers:syncHeaders(false)});
+        if(res.status===409){showGate("這位成員剛剛仍在線上，暫時不能標記為未參與。");return false}
+        if(res.status===429){showGate("嘗試次數過多，請稍候再試。");return false}
+        if(!res.ok){showGate("目前無法標記這位成員，請稍後再試。");return false}
+        await refreshFromServer();
+        render();showOk("已標記為未參與。這位成員重新連線後會自動恢復計算。");
+        return true;
+      }catch(e){showGate("目前連不上小組伺服器，請確認網路後再試一次。");return false}
     }
     /* An unchanged long-poll reply still carries member metadata. That source
        list is server-owned, so acknowledge just it without masking a pending
@@ -86,12 +117,22 @@
     document.addEventListener("focusout",()=>setTimeout(flushRemotePaint,0),true);
     /* A focused field may render its card during blur/change. Without preserving
        the intended button activation, that render removes the original button
-       before its click fires, so the user has to click a second time. */
+       before its click fires, so the user has to click a second time.
+
+       Cancelling the press is what keeps the button alive long enough to be
+       clicked, so the listener is deliberately narrow: a primary press, on a
+       button that lives inside a region render() rewrites, while a form control
+       with pending text is focused. A button anywhere else survives the repaint
+       on its own, and suppressing its native behaviour would buy nothing. */
+    const REPAINTED_REGIONS="#main,#preview";
     let pendingDraftButtonActivation=null;
     function isDraftControl(el){return !!(el&&["INPUT","TEXTAREA","SELECT"].includes(el.tagName)&&el.id)}
+    function inRepaintedRegion(el){return !!(el&&typeof el.closest==="function"&&el.closest(REPAINTED_REGIONS))}
     document.addEventListener("pointerdown",e=>{
+      if(e.isPrimary===false||Number(e.button||0)>0)return;
       let button=e.target&&e.target.closest?e.target.closest("button"):null,control=document.activeElement;
       if(!button||button.disabled||!isDraftControl(control)||control===button)return;
+      if(!inRepaintedRegion(button))return;
       if(remotePaintPending)remoteDraftSnapshot=captureRemoteDraft()||remoteDraftSnapshot;
       pendingDraftButtonActivation={button,control,step:Number(S.step),id:button.id||"",action:button.getAttribute("onclick")||"",text:button.textContent||""};
       e.preventDefault();
@@ -104,8 +145,19 @@
       setTimeout(()=>{
         if(Number(S.step)!==pending.step||imeComposing)return;
         let target=pending.button.isConnected?pending.button:[...document.querySelectorAll("button")].find(b=>!b.disabled&&(pending.id&&b.id===pending.id||pending.action&&b.getAttribute("onclick")===pending.action&&(b.textContent||"")===pending.text));
+        /* No fallback message when nothing matches: the buttons are rendered
+           from state, so a button with no replacement means the blur handler
+           changed the state that produced it, and the action no longer applies. */
         if(target&&!target.disabled)target.click();
       },0);
+    },true);
+    /* A press that ends anywhere but on its own button never becomes a click,
+       so nothing would consume the record and it would wait for an unrelated
+       later click on the same button. */
+    document.addEventListener("pointerup",e=>{
+      let pending=pendingDraftButtonActivation;if(!pending)return;
+      let button=e.target&&e.target.closest?e.target.closest("button"):null;
+      if(button!==pending.button)pendingDraftButtonActivation=null;
     },true);
     document.addEventListener("pointercancel",()=>{pendingDraftButtonActivation=null},true);
     function applyAuthoritativeProgress(currentStep){let step=Number(currentStep);if(!Number.isFinite(step)||step<0||S.reviewingStep)return;if(S.revisionMode&&typeof revisionOfficialStep==="function"){S.step=Number(revisionOfficialStep())||S.step;return}S.step=Math.max(S.step,Math.min(19,Math.trunc(step)))}

@@ -42,6 +42,13 @@ export interface AppConfig {
   roomCodeLength: number;
   /** How long a member's session token stays valid, refreshed on every request. */
   sessionTtlHours: number;
+  /**
+   * How long a member has to have been silent before the rest of the group may
+   * carry on without them. Every authenticated request refreshes the member,
+   * and a tab that is only watching still polls, so this measures a device that
+   * is actually gone rather than a student who is thinking.
+   */
+  memberAbsentAfterSeconds: number;
   rateLimitEnabled: boolean;
   /**
    * Failed room lookups per address per minute. This is the budget that stops
@@ -154,6 +161,10 @@ export function loadConfig(publicDir: string): AppConfig {
       DEFAULT_CODE_LENGTH,
     ),
     sessionTtlHours: collect(() => optionalInteger("SESSION_TTL_HOURS", 24, 1, 8_760), 24),
+    memberAbsentAfterSeconds: collect(
+      () => optionalInteger("MEMBER_ABSENT_AFTER_SECONDS", 300, 60, 86_400),
+      300,
+    ),
     rateLimitEnabled: collect(() => optionalBoolean("RATE_LIMIT_ENABLED", true), true),
     rateLimitLookupFailuresPerMinute: collect(
       () => optionalInteger("RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE", 60, 1, 100_000),

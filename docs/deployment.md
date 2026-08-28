@@ -91,6 +91,7 @@ Environment configuration, the `.env` file, the database, the admin token, and a
 | `TRUST_PROXY` | `false` | 是否從 `X-Forwarded-For` 取得客戶端位址。只有 app 僅能經過會**覆寫**此標頭的受信任 proxy 存取時才設為 `true`；隨附的 Compose + nginx 範例符合此前提。限流以此位址為鍵。 |
 | `ROOM_CODE_LENGTH` | `10` | 新建房間碼的長度（Crockford Base32 字元），10 個字元為 50 位元。只影響新建的房間；已發出、長度在 8 到 24 之間的代碼仍可使用。 |
 | `SESSION_TTL_HOURS` | `24` | 成員 session 權杖的有效期，每次請求都會延長。 |
+| `MEMBER_ABSENT_AFTER_SECONDS` | `300` | 成員要安靜多久，小組才可以標記他為未參與並繼續進行。每一次通過驗證的請求都會重新計時，而只是在旁邊看的分頁也會持續輪詢，所以這裡量到的是真的離線的裝置，不是正在思考的學生。標記過的成員一旦重新連線就會自動恢復計算。 |
 | `RATE_LIMIT_ENABLED` | `true` | 關閉後所有限流都不生效。 |
 | `RATE_LIMIT_LOOKUP_FAILURES_PER_MINUTE` | `60` | 每個來源位址每分鐘可失敗的房間查詢次數。 |
 | `RATE_LIMIT_ROOM_CREATES_PER_HOUR` | `60` | 每個來源位址每小時可建立的房間數。 |

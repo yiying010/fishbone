@@ -206,4 +206,17 @@ export const migrations: Migration[] = [
       drop index if exists submissions_live_room_kind_idx;
     `,
   },
+  {
+    id: "0008_member_participation",
+    sql: /* sql */ `
+      -- Every gate in the activity waits for all the members who joined, and a
+      -- member row is never removed, so one device that dies mid-lesson stops
+      -- the whole group with no way out. This column is the way out.
+      --
+      -- It is server-owned and deliberately not projected from a snapshot:
+      -- has_joined is merged with OR precisely so a stale browser cannot
+      -- un-join anyone, which would also make it unable to record this.
+      alter table members add column is_active boolean not null default true;
+    `,
+  },
 ];

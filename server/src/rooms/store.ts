@@ -23,11 +23,27 @@ export interface RoomState {
   members: RoomMember[];
 }
 
+/**
+ * `presence` is what the activity's completion gates are counted from:
+ *
+ * - `joined`   in the room and recently seen
+ * - `silent`   in the room but not seen for MEMBER_ABSENT_AFTER_SECONDS, so
+ *              the rest of the group is offered the chance to carry on without
+ *              this device
+ * - `excluded` the group took that offer; still counted by nothing until this
+ *              member comes back, which any authenticated request undoes
+ * - `pending`  projected from a snapshot but never actually joined
+ */
+export type MemberPresence = "joined" | "silent" | "excluded" | "pending";
+
 export interface RoomMember {
   memberId: string;
   displayName: string;
   currentStep: number;
+  presence: MemberPresence;
 }
+
+export type AbsenceResult = "ok" | "unknown-member" | "self" | "still-present";
 
 export interface WriteAccepted {
   status: "accepted";
@@ -115,9 +131,11 @@ export class RoomStore {
   private readonly artifacts: ArtifactRepository;
   private readonly retention: RetentionRepository;
   private readonly administration: AdminRoomRepository;
+  private readonly absentAfterSeconds: number;
 
-  constructor(pool: Pool) {
+  constructor(pool: Pool, absentAfterSeconds: number = 300) {
     this.pool = pool;
+    this.absentAfterSeconds = absentAfterSeconds;
     this.artifacts = new ArtifactRepository(pool);
     this.retention = new RetentionRepository(pool);
     this.administration = new AdminRoomRepository(pool);
@@ -209,6 +227,7 @@ export class RoomStore {
            set display_name = case when excluded.display_name = '' then members.display_name
                                    else excluded.display_name end,
                has_joined         = true,
+               is_active          = true,
                current_step       = greatest(members.current_step, excluded.current_step),
                last_seen_at       = now(),
                session_token_hash = excluded.session_token_hash,
@@ -245,7 +264,10 @@ export class RoomStore {
     const { rows } = await this.pool.query<{ member_id: string; room_id: number }>(
       `update members m
           set session_expires_at = now() + make_interval(hours => $3::int),
-              last_seen_at       = now()
+              last_seen_at       = now(),
+              -- A device the group had written off is answering again, so it
+              -- is back in every count without anyone having to say so.
+              is_active          = true
          from rooms r
         where r.id = m.room_id
           and lower(r.code) = lower($1)
@@ -298,18 +320,68 @@ export class RoomStore {
   }
 
   private async membersForRoom(db: Pool | PoolClient, roomId: number): Promise<RoomMember[]> {
-    const { rows } = await db.query<{ member_id: string; display_name: string; current_step: number }>(
-      `select member_id, display_name, current_step
+    const { rows } = await db.query<{
+      member_id: string;
+      display_name: string;
+      current_step: number;
+      has_joined: boolean;
+      is_active: boolean;
+      is_silent: boolean;
+    }>(
+      `select member_id, display_name, current_step, has_joined, is_active,
+              last_seen_at < now() - make_interval(secs => $2::int) as is_silent
          from members
         where room_id = $1 and not is_system
         order by first_seen_at, member_id`,
-      [roomId],
+      [roomId, this.absentAfterSeconds],
     );
     return rows.map((member) => ({
       memberId: member.member_id,
       displayName: member.display_name,
       currentStep: member.current_step,
+      presence: !member.has_joined
+        ? "pending"
+        : !member.is_active
+          ? "excluded"
+          : member.is_silent
+            ? "silent"
+            : "joined",
     }));
+  }
+
+  /**
+   * Lets the group carry on without a device that is no longer answering.
+   *
+   * Deliberately not a privileged operation: the room has no teacher identity,
+   * and inventing one would be a larger change than the problem needs. What
+   * keeps it honest is that the server refuses while the target is still being
+   * seen, so this cannot be used to push a participating member out of a vote;
+   * and that `authenticate()` sets is_active back to true, so a member who
+   * returns is counted again without anyone having to undo anything.
+   */
+  async setMemberAbsent(
+    roomId: number,
+    actorMemberId: string,
+    targetMemberId: string,
+  ): Promise<AbsenceResult> {
+    if (targetMemberId === "" || targetMemberId === actorMemberId) return "self";
+    const { rowCount } = await this.pool.query(
+      `update members
+          set is_active = false
+        where room_id = $1
+          and member_id = $2
+          and not is_system
+          and is_active
+          and last_seen_at < now() - make_interval(secs => $3::int)`,
+      [roomId, targetMemberId, this.absentAfterSeconds],
+    );
+    if ((rowCount ?? 0) > 0) return "ok";
+    const { rows } = await this.pool.query<{ is_active: boolean }>(
+      `select is_active from members where room_id = $1 and member_id = $2 and not is_system`,
+      [roomId, targetMemberId],
+    );
+    // Already excluded is the state the caller asked for, so it is not a failure.
+    return rows[0] === undefined ? "unknown-member" : rows[0].is_active ? "still-present" : "ok";
   }
 
   /**

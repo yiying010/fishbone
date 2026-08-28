@@ -104,7 +104,7 @@ export async function buildApp(config: AppConfig, pool: Pool): Promise<FastifyIn
     done();
   });
 
-  const store = new RoomStore(pool);
+  const store = new RoomStore(pool, config.memberAbsentAfterSeconds);
   const notifier = new RoomNotifier();
   const limiters = createLimiters(config);
   const aiService = config.aiEnabled && config.openAiApiKey !== null

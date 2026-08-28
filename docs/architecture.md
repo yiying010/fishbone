@@ -32,3 +32,11 @@ These remain ordered classic scripts because the existing document uses inline H
 `rooms/store.ts` remains the compatibility facade used by the application and tests. Core room synchronization and session transactions stay there. Independent repositories own administrative queries, artifact persistence, and retention queries. Room errors and member-id validation are separate domain concerns.
 
 An accepted snapshot is projected inside the caller's transaction. `domain/projection.ts` only coordinates the required order, while the `domain/projections/` modules independently project members, submissions, groupings, and votes. Member projection runs first because grouping titles depend on stored member names.
+
+## Member presence
+
+Every completion gate in the activity waits for the members who joined, and a member row is never deleted, so a device that stops answering mid-lesson would otherwise stop the whole group with no way out. `members.is_active` is the way out. It is server-owned and never written by snapshot projection, which merges `has_joined` with OR precisely so that a stale browser cannot un-join anyone.
+
+The room has no teacher identity to check a privileged operation against, so any member of the room may ask for another to be marked absent. Two rules keep that from becoming a way to push a participating member out of a vote: the store refuses while the target's `last_seen_at` is within `MEMBER_ABSENT_AFTER_SECONDS`, and `authenticate()` sets `is_active` back to true, so a member who returns is counted again without anyone having to undo anything. `last_seen_at` is a real presence signal rather than a write signal because every authenticated request refreshes it, including the long poll a tab that is only watching still runs.
+
+The resulting `presence` value (`joined`, `silent`, `excluded`, `pending`) rides out on the members list that every poll response already carries, so the change needs no room revision of its own.

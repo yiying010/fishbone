@@ -108,7 +108,8 @@ if (!databaseUrl) {
     "requestAiReview", "sharedSnapshot", "canonJson", "serverSnapshotJson", "loadRoomToken", "pushRoom",
     "applyUnchangedRoomPolicy",
     "runMethodAiCheck", "applyRemote", "renameDraftCat", "renameDraftMethodCat",
-    "submitCauseClass", "submitMethodClass",
+    "submitCauseClass", "submitMethodClass", "addSpoken", "removeDistress",
+    "markMemberAbsent", "memberIds", "memberPresence", "refreshFromServer",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -331,6 +332,104 @@ if (!databaseUrl) {
     assert.equal(await fresh.connectRoom(true), "ok");
   });
 
+  test("a silent member can be dropped from the gates, and rejoining brings them back", async () => {
+    const code = await newRoom();
+    const staying = openTab();
+    staying.S.roomCode = code;
+    staying.S.nameDraft = "小安";
+    staying.S.joined = true;
+    assert.equal(await staying.connectRoom(true), "ok");
+
+    const leaving = openTab();
+    leaving.S.roomCode = code;
+    leaving.S.nameDraft = "小美";
+    leaving.S.joined = true;
+    assert.equal(await leaving.connectRoom(true), "ok");
+    for (const tab of [staying, leaving]) {
+      if (tab.SYNC.pushTimer) clearTimeout(tab.SYNC.pushTimer);
+      tab.SYNC.pushTimer = null;
+    }
+    leaving.SYNC.session = 0;
+    leaving.S.joined = false;
+
+    // Both members count, so every gate in the activity waits for both.
+    await staying.refreshFromServer();
+    assert.deepEqual(
+      [...staying.memberIds()].sort(),
+      [staying.S.selfId, leaving.S.selfId].sort(),
+    );
+    assert.equal(await staying.markMemberAbsent(leaving.S.selfId), false, "a member seen just now is refused");
+
+    await pool.query(
+      `update members set last_seen_at = now() - interval '1 hour'
+        where member_id = $1 and room_id = (select id from rooms where lower(code) = lower($2))`,
+      [leaving.S.selfId, code],
+    );
+    assert.equal(await staying.markMemberAbsent(leaving.S.selfId), true);
+    assert.equal(staying.memberPresence(leaving.S.selfId), "excluded");
+    assert.deepEqual(staying.memberIds(), [staying.S.selfId], "the gates now wait for one member");
+
+    // The device comes back: authenticating is enough to be counted again.
+    const returning = openTab(leaving.sessionStore);
+    returning.S.roomCode = code;
+    returning.S.nameDraft = "小美";
+    returning.S.joined = true;
+    assert.equal(await returning.connectRoom(true), "ok");
+    if (returning.SYNC.pushTimer) clearTimeout(returning.SYNC.pushTimer);
+    returning.SYNC.pushTimer = null;
+
+    await staying.refreshFromServer();
+    assert.equal(staying.memberPresence(returning.S.selfId), "joined");
+    assert.deepEqual(
+      [...staying.memberIds()].sort(),
+      [staying.S.selfId, returning.S.selfId].sort(),
+    );
+  });
+
+  /*
+   * The delete happens before any authoritative reply has lifted
+   * distressesVersion to the timestamp scale the card itself uses, which is the
+   * state a tab is in for the first card it writes to a fresh room.
+   */
+  test("a card deleted straight after it was written does not come back for another tab", async () => {
+    const code = await newRoom();
+    const author = openTab();
+    author.S.roomCode = code;
+    author.S.nameDraft = "小安";
+    author.S.joined = true;
+    assert.equal(await author.connectRoom(true), "ok");
+    if (author.SYNC.pushTimer) clearTimeout(author.SYNC.pushTimer);
+    author.SYNC.pushTimer = null;
+    activateStubbedMember(author);
+
+    author.document.getElementById("newText").value = "我常常忘記作業期限";
+    author.addSpoken("distress");
+    const card = author.S.distresses[0];
+    assert.ok(card, `the card was rejected: ${author.shown()}`);
+    assert.ok(
+      Number(card.contentVersion) > Number(author.S.distressesVersion),
+      "the collection version has to still be below the card for this to be the case under test",
+    );
+    if (author.SYNC.pushTimer) clearTimeout(author.SYNC.pushTimer);
+    author.SYNC.pushTimer = null;
+    assert.equal(await author.pushRoom(), true);
+
+    author.removeDistress(card.id);
+    assert.deepEqual(author.S.distresses, []);
+    if (author.SYNC.pushTimer) clearTimeout(author.SYNC.pushTimer);
+    author.SYNC.pushTimer = null;
+    assert.equal(await author.pushRoom(), true);
+
+    const other = openTab();
+    other.S.roomCode = code;
+    other.S.nameDraft = "小美";
+    other.S.joined = true;
+    assert.equal(await other.connectRoom(true), "ok");
+    if (other.SYNC.pushTimer) clearTimeout(other.SYNC.pushTimer);
+    other.SYNC.pushTimer = null;
+    assert.deepEqual(other.S.distresses.map((item) => item.id), []);
+  });
+
   function activateStubbedMember(tab) {
     tab.S.joined = true;
     tab.S.active = tab.S.selfId;
@@ -390,7 +489,9 @@ if (!databaseUrl) {
         click: runSubmit,
         getAttribute: (name) => (name === "onclick" ? action : null),
       };
-      button.closest = (selector) => (selector === "button" ? button : null);
+      // The real button is inside #main, which render() rewrites; that is the
+      // only place the activation guard applies.
+      button.closest = (selector) => (selector === "button" || selector.includes("#main") ? button : null);
       return button;
     };
     const original = makeButton();

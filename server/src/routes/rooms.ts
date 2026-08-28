@@ -93,6 +93,36 @@ export function registerRoomRoutes(app: FastifyInstance, deps: RoomRouteDeps): v
     return { room: roomCode, memberId, ...joined };
   });
 
+  /*
+   * Lets the group carry on without a member whose device stopped answering.
+   * Any member of the room may ask, because the room has no teacher identity
+   * to check against; the rule that makes that safe lives in the store, which
+   * refuses while the target is still being seen and undoes this the moment
+   * they come back. The change rides out on the members list every poll
+   * already carries, so it needs no revision bump of its own.
+   */
+  app.post("/api/rooms/:code/members/:memberId/absence", async (request, reply) => {
+    const limited = gateRoomRequest(request, reply, limiters);
+    if (limited) return limited;
+
+    const session = await authenticateRoom(request, deps);
+    if (session === null) return roomNotFound(request, reply, limiters);
+    const target = normalizeMemberId((request.params as { memberId?: string }).memberId);
+
+    const outcome = await store.setMemberAbsent(session.member.roomId, session.member.memberId, target);
+    reply.header("cache-control", "no-store");
+    if (outcome === "unknown-member") return roomNotFound(request, reply, limiters);
+    if (outcome === "self") {
+      reply.code(400);
+      return { error: "bad_request", message: "a member cannot mark themselves absent" };
+    }
+    if (outcome === "still-present") {
+      reply.code(409);
+      return { error: "member_still_present" };
+    }
+    return { room: session.roomCode, memberId: target, presence: "excluded" };
+  });
+
   app.get("/api/rooms/:code/state", async (request, reply) => {
     const limited = gateRoomRequest(request, reply, limiters);
     if (limited) return limited;

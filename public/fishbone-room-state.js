@@ -1,4 +1,3 @@
-    function roomKey(room=S.roomCode){return roomPrefix+String(room||"").trim()}
     function plain(x){return JSON.parse(JSON.stringify(x))}
     function mergeById(a=[],b=[]){let m=new Map();[...a,...b].forEach(x=>{if(x&&x.id)m.set(x.id,{...(m.get(x.id)||{}),...x})});return [...m.values()]}
     function mergeVotes(a={},b={}){return {...a,...b}}

@@ -43,6 +43,7 @@ interface MemberRow {
   color: string;
   is_system: boolean;
   has_joined: boolean;
+  is_active: boolean;
 }
 
 const MEMBER_COLORS = ["#276EF1", "#00A676", "#D95D39", "#7B61FF", "#B7791F", "#008C95"] as const;
@@ -137,7 +138,7 @@ export async function buildAuthoritativeSnapshot(
       [roomId],
     ),
     db.query<MemberRow>(
-      `select member_id, display_name, color, is_system, has_joined
+      `select member_id, display_name, color, is_system, has_joined, is_active
          from members
         where room_id = $1
         order by first_seen_at, member_id`,
@@ -171,7 +172,9 @@ export async function buildAuthoritativeSnapshot(
     // is accepted and naturally repairs the stored projection.
     color: SAFE_COLOR.test(member.color) ? member.color : MEMBER_COLORS[index % MEMBER_COLORS.length],
     system: member.is_system,
-    joined: member.has_joined,
+    // A member the group carried on without is not counted by the completion
+    // gates, and this is the field those gates read.
+    joined: member.has_joined && member.is_active,
   }));
 
   const authoritativeVoteVersions: Record<string, number> = {};

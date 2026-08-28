@@ -197,4 +197,26 @@ export const migrations: Migration[] = [
         drop column if exists deleted_version;
     `,
   },
+  {
+    id: "0007_drop_redundant_submission_index",
+    sql: /* sql */ `
+      -- Its columns are the primary key of submissions in the same order, and
+      -- nothing filters on deleted_at in SQL: the hydrate reads every row of a
+      -- room and decides liveness in TypeScript. It only cost every write.
+      drop index if exists submissions_live_room_kind_idx;
+    `,
+  },
+  {
+    id: "0008_member_participation",
+    sql: /* sql */ `
+      -- Every gate in the activity waits for all the members who joined, and a
+      -- member row is never removed, so one device that dies mid-lesson stops
+      -- the whole group with no way out. This column is the way out.
+      --
+      -- It is server-owned and deliberately not projected from a snapshot:
+      -- has_joined is merged with OR precisely so a stale browser cannot
+      -- un-join anyone, which would also make it unable to record this.
+      alter table members add column is_active boolean not null default true;
+    `,
+  },
 ];

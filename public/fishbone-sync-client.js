@@ -76,7 +76,7 @@
         /* 409 means this member id belongs to a session this tab cannot prove it
            owns, which for a student is another device already in the room under
            the same identity, not a bad room code. */
-        if(res.status===409){SYNC.session=0;setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
+        if(res.status===409){let conflict=await res.json().catch(()=>({}));SYNC.session=0;if(conflict.error==="room_locked"){setSyncStatus(false,"這個房間已鎖定本輪成員名單。");return "locked"}setSyncStatus(false,"這個身分已經在別的裝置或分頁使用中。");return "taken"}
         if(!res.ok)throw new Error("HTTP "+res.status);
         let data=await res.json();
         if(SYNC.session!==session)return "error";

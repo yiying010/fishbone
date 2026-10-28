@@ -28,6 +28,7 @@ const scriptFiles = [
   "fishbone-methods.js",
   "fishbone-diagram-data.js",
   "fishbone-svg.js",
+  "fishbone-advanced-flow.js",
   "fishbone-bootstrap.js",
 ];
 await Promise.all(styleFiles.map((file) => readFile(new URL(`../../public/${file}`, import.meta.url), "utf8")));
@@ -49,7 +50,7 @@ test("presentation and behavior are separated into ordered frontend assets", () 
     (match) => match[1],
   );
   assert.deepEqual(referencedStyles, styleFiles);
-  assert.deepEqual(referencedScripts, scriptFiles);
+  assert.deepEqual(referencedScripts.map((src) => src.split("?")[0]), scriptFiles);
 });
 
 test("the frontend assets still implement the 19-step activity", () => {

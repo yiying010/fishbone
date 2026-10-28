@@ -14,3 +14,9 @@ export class RoomNotFoundError extends Error {}
  * snapshot, so it identifies a collaborator but cannot authorise acting as one.
  */
 export class MemberIdentityError extends Error {}
+
+/**
+ * The room roster has been locked and the requested member id was not part of
+ * the locked roster. Existing members may still rotate their sessions.
+ */
+export class RoomLockedError extends Error {}

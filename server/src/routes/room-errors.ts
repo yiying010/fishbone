@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "../config.ts";
 import { SnapshotError } from "../domain/snapshot.ts";
 import { RoomCodeFormatError } from "../rooms/codes.ts";
-import { MemberIdentityError, RoomCodeError, RoomNotFoundError } from "../rooms/errors.ts";
+import { MemberIdentityError, RoomCodeError, RoomLockedError, RoomNotFoundError } from "../rooms/errors.ts";
 import { ROOM_NOT_FOUND } from "./room-context.ts";
 
 /** Maps domain and transport failures to the room API's stable public contract. */
@@ -32,6 +32,10 @@ export function registerRoomErrorHandler(app: FastifyInstance, config: AppConfig
     if (error instanceof MemberIdentityError) {
       reply.code(409);
       return reply.send({ error: "member_id_in_use" });
+    }
+    if (error instanceof RoomLockedError) {
+      reply.code(409);
+      return reply.send({ error: "room_locked" });
     }
     // Fastify's JSON parser and content-type handling report a client mistake
     // through statusCode. Keep that 4xx outcome, but without the parser's own

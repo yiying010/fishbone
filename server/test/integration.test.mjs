@@ -205,6 +205,33 @@ if (!databaseUrl) {
     assert.equal((await get(`/api/rooms/${code}/state`, auth(rotated.token))).statusCode, 200);
   });
 
+  test("a locked roster rejects new members but lets existing members rejoin", async () => {
+    const code = await newRoom();
+    const first = await joinRoom(code, "u1", "小安");
+    const second = await joinRoom(code, "u2", "阿凱");
+
+    const locked = await post(`/api/rooms/${code}/state`, {
+      step: 2,
+      baseRevision: 0,
+      snapshot: snapshot({
+        sources: [
+          { id: "u1", name: "小安", color: "#276EF1", system: false, joined: true },
+          { id: "u2", name: "阿凱", color: "#46515f", system: false, joined: true },
+        ],
+        membersLocked: true,
+        lockedMemberIds: ["u1", "u2"],
+      }),
+    }, auth(first.token));
+    assert.equal(locked.statusCode, 200, locked.body);
+
+    const newcomer = await post(`/api/rooms/${code}/join`, { memberId: "u3", name: "小悠", step: 2 });
+    assert.equal(newcomer.statusCode, 409);
+    assert.equal(json(newcomer).error, "room_locked");
+
+    const rejoined = await joinRoom(code, "u2", "阿凱", 2, auth(second.token));
+    assert.notEqual(rejoined.token, second.token);
+  });
+
   test("the release migration frees every session issued before ownership was enforced", async () => {
     // Replays the upgrade rather than trusting the SQL by reading it: a session
     // that predates the ownership rule was handed to a browser with nowhere to

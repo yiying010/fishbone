@@ -1,5 +1,21 @@
 # Current Recovery Baseline
 
+## Cloud-flow integration update (2026-10-29)
+
+Branch: `integration/sites-cloud-flow`
+
+This branch preserves the recovery baseline and integrates the currently
+deployed OpenAI Sites activity flow back into the original Fastify/PostgreSQL
+repository. It adds synchronized member-roster locking, discussion and
+revoting, post-edit confirmation checkpoints, stronger input/progress guards,
+and stable dropdown alternatives for all three card-classification steps.
+The PostgreSQL backend now rejects new member IDs after the roster is locked
+while allowing a locked member to rejoin with the existing session.
+
+Verification result: **94 tests passed, 0 failed, 0 skipped**, using an
+isolated PostgreSQL test database in Docker. The original baseline branch and
+tag below remain unchanged and can still be used for recovery.
+
 Date verified: 2026-10-08 (Asia/Taipei)
 
 Baseline branch: `baseline/recovered-2026-10-08`

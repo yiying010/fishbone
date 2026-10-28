@@ -5,10 +5,10 @@ import { withTransaction, type Pool } from "../db/pool.ts";
 import { AdminRoomRepository } from "./admin-repository.ts";
 import { ArtifactRepository, type ArtifactInput } from "./artifact-repository.ts";
 import { generateRoomCode } from "./codes.ts";
-import { MemberIdentityError, RoomNotFoundError } from "./errors.ts";
+import { MemberIdentityError, RoomLockedError, RoomNotFoundError } from "./errors.ts";
 import { RetentionRepository } from "./retention-repository.ts";
 
-export { MemberIdentityError, RoomCodeError, RoomNotFoundError } from "./errors.ts";
+export { MemberIdentityError, RoomCodeError, RoomLockedError, RoomNotFoundError } from "./errors.ts";
 export { normalizeMemberId } from "./member-id.ts";
 
 export interface RoomState {
@@ -119,6 +119,13 @@ export class RoomStore {
       );
       const room = rows[0];
       if (room === undefined) return null;
+
+      const lockedMemberIds = Array.isArray(room.snapshot?.["lockedMemberIds"])
+        ? room.snapshot["lockedMemberIds"].map((value) => String(value))
+        : [];
+      if (room.snapshot?.["membersLocked"] === true && !lockedMemberIds.includes(memberId)) {
+        throw new RoomLockedError("member id is not part of the locked room roster");
+      }
 
       // A member id is public collaboration metadata: it is carried in the
       // shared snapshot, so it cannot double as a credential. Without this

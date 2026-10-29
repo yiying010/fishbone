@@ -1,7 +1,11 @@
     function lockedTools(type,id){return `<div class="readOnlyNote">這是其他成員提出的內容，這裡先以唯讀呈現。</div><div class="row wrap"><button class="secondary" onclick="copyAsMine('${type}','${id}')">複製成我的卡片</button><button class="secondary" onclick="suggestEdit('${type}','${id}')">提出修改建議</button></div>`}
     function suggestEdit(type,id){let note=prompt("請寫下想建議修改的地方：");if(note)alert("已收到修改建議。正式多人版會將建議送給原提出者或小組代表確認。")}
     function copyAsMine(type,id){if(!hasSpeaker()){remindSpeaker();return}let list=type==="distress"?S.distresses:type==="cause"?S.causes:S.methods,item=list.find(x=>x.id===id);if(!item)return;let speaker=actor(),base={id:uid(type[0]),text:item.text,source:speaker,createdBy:speaker,updatedBy:speaker};if(type==="distress")S.distresses.push(base);if(type==="cause")S.causes.push({...base,status:"待確認",aiGuess:classifyCause(item.text).kind,catId:""});if(type==="method")S.methods.push({...base,big:"",status:"草稿",causes:[],effect:""});render()}
-    function setUpdated(x){x.updatedBy=actor()}
+    /* Each collaborative card carries its own revision.  Room-level counters
+       can tie when two members edit different cards at the same time; a
+       per-card revision lets the merge keep both updates instead of allowing
+       either full-room snapshot to restore the other card's older state. */
+    function setUpdated(x){x.updatedBy=actor();x.itemVersion=(Number(x.itemVersion)||0)+1}
     function markConfirm(key){S.confirmBy[key]=actor()}
     function confirmLine(key,label){return S.confirmBy[key]?`<p class="confirmMeta">${esc(label)}由 ${esc(src(S.confirmBy[key]).name)} 確認。</p>`:""}
     function markInteraction(){S.ttsReady=true}
@@ -39,7 +43,7 @@
     function maybeAdvanceAfterCauseHandling(){let st=causeHandlingDone();if(S.step===8&&st.ok){S.reviewingStep=0;S.step=9}}
     function methodProcessed(m){return ["已完成檢查","已完成對應檢查","暫不納入","正式方法"].includes(m.status)}
     function methodCheckDone(){let total=S.methods.length,done=S.methods.filter(methodProcessed).length;return {ok:total>0&&done===total,total,done}}
-    function maybeAdvanceAfterMethodCheck(){let st=methodCheckDone();if(S.step===14&&st.ok){S.reviewingStep=0;S.step=15}}
+    function maybeAdvanceAfterMethodCheck(){let st=methodCheckDone();if(S.step===14&&st.ok&&methodClassCandidates().length){S.reviewingStep=0;S.step=15}}
     function vagueMethod(m){let t=String(m&&m.text||"").trim();return !t||t.length<4||/^(努力|更努力|認真|更認真|改善|變好|加油|專心|提高專注力)$/.test(t)}
     function methodStatus(m){if(m.status==="正式方法")return "已放進魚骨圖";if(["已完成檢查","已完成對應檢查"].includes(m.status))return "已通過檢查";if(m.status==="AI檢查中")return "AI 檢查中";if(m.status==="需要修改說明")return "需要修改說明";if(m.status==="暫不納入")return "暫不處理／暫不保留";return "尚未送交 AI 檢查"}
     function methodHint(m){if(["已完成檢查","已完成對應檢查"].includes(m.status))return "這個方法已能看出回應的原因，也有說明如何支持決策目標。";if(m.status==="AI檢查中")return "AI 正在檢查方法、原因與決策目標之間的關係。";if(m.status==="需要修改說明")return m.checkMsg||"請修改方法、對應原因或支持決策目標的說明後，再送交 AI 檢查。";if(m.status==="暫不納入")return "這張方法暫時不進入下一步正式候選。";if(vagueMethod(m))return "這個方法還不夠具體，請補充誰做、什麼時候做或怎麼做。";if(!m.causes.length)return "這個方法主要回應哪一個原因？請至少連結一項原因。";if(!String(m.effect||"").trim())return "這個方法怎麼幫助達成目前的決策目標？請補一句說明。";return "請送交 AI 檢查方法、原因與決策目標之間的關係。"}

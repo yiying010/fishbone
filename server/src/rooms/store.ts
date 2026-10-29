@@ -212,18 +212,33 @@ export class RoomStore {
    * without this their last_seen_at would freeze at the moment they joined.
    */
   async touchMember(code: string, memberId: string, step: number): Promise<void> {
-    await this.pool.query(
-      `with m as (
-         update members set last_seen_at = now(),
-                            current_step = greatest(current_step, $3)
-          where room_id = (select id from rooms where lower(code) = lower($1))
-            and member_id = $2
-          returning room_id, current_step)
-       update rooms set current_step = (select current_step from m)
-        where id = (select room_id from m)
-          and rooms.current_step < (select current_step from m)`,
-      [code, memberId, step],
-    );
+    await withTransaction(this.pool, async (client) => {
+      // Keep the same lock order as join() and write(): room first, then member.
+      // The previous one-statement CTE could lock the member first while a
+      // concurrent snapshot projection held the room, producing a deadlock.
+      const { rows: rooms } = await client.query<{ id: number }>(
+        `select id from rooms where lower(code) = lower($1) for update`,
+        [code],
+      );
+      const roomId = rooms[0]?.id;
+      if (roomId === undefined) return;
+
+      const { rows: members } = await client.query<{ current_step: number }>(
+        `update members
+            set last_seen_at = now(),
+                current_step = greatest(current_step, $3)
+          where room_id = $1 and member_id = $2
+          returning current_step`,
+        [roomId, memberId, step],
+      );
+      const currentStep = members[0]?.current_step;
+      if (currentStep === undefined) return;
+
+      await client.query(
+        `update rooms set current_step = $2 where id = $1 and current_step < $2`,
+        [roomId, currentStep],
+      );
+    });
   }
 
   /**

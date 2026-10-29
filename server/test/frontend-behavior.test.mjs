@@ -104,7 +104,7 @@ if (!databaseUrl) {
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
     "requestAiReview", "sharedSnapshot", "canonJson", "loadRoomToken", "pushRoom",
-    "runMethodAiCheck", "refreshFromServer", "autoAdvanceFromShared", "canAdvance",
+    "runMethodAiCheck", "refreshFromServer", "autoAdvanceFromShared", "canAdvance", "mergeRoom",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -372,6 +372,125 @@ if (!databaseUrl) {
     assert.equal(tab.S.step, 14);
     assert.equal(tab.S.reviewingStep, 0);
     assert.equal(tab.canAdvance(14).ok, false);
+  });
+
+  test("a clear vote result received through synchronization is finalized", () => {
+    const tab = openTab();
+    const otherId = "member-b";
+    tab.S.joined = true;
+    tab.S.step = 3;
+    tab.S.reviewingStep = 0;
+    tab.S.sources = [
+      { id: tab.S.selfId, name: "小安", system: false, joined: true },
+      { id: otherId, name: "阿凱", system: false, joined: true },
+      { id: "group", name: "小組提出", system: true, joined: true },
+      { id: "unknown", name: "未指定", system: true, joined: false },
+    ];
+    tab.S.distresses = [
+      { id: "d1", text: "常常忘記作業期限", createdBy: tab.S.selfId, source: tab.S.selfId },
+      { id: "d2", text: "容易被手機通知分心", createdBy: otherId, source: otherId },
+    ];
+    tab.S.groupProposals = [{
+      id: "gp1",
+      source: tab.S.selfId,
+      groups: [{ name: "時間安排", ids: ["d1", "d2"] }],
+    }];
+    tab.S.groupingRound = 1;
+    tab.S.groupingConfirmed = "";
+    tab.S.groupingVotes = {
+      [tab.S.selfId]: { value: "gp1", round: 1 },
+      [otherId]: { value: "gp1", round: 1 },
+    };
+
+    tab.autoAdvanceFromShared();
+
+    assert.equal(tab.S.groupingConfirmed, "gp1");
+    assert.equal(tab.S.step, 4);
+    assert.deepEqual(tab.S.topics.map((topic) => topic.name), ["時間安排"]);
+    assert.ok(tab.S.distresses.every((distress) => distress.groupId === tab.S.topics[0].id));
+  });
+
+  test("two members can confirm different cause cards at the same time", async () => {
+    const code = await newRoom();
+    const first = openTab();
+    const second = openTab();
+    first.S.roomCode = code;
+    first.S.nameDraft = "小安";
+    first.S.joined = true;
+    assert.equal(await first.connectRoom(true), "ok");
+
+    first.S.step = 8;
+    first.S.active = first.S.selfId;
+    first.S.causes = [
+      { id: "c1", text: "沒有先整理截止日期", createdBy: first.S.selfId, status: "待確認", itemVersion: 1 },
+      { id: "c2", text: "手機通知太多容易分心", createdBy: second.S.selfId, status: "待確認", itemVersion: 1 },
+    ];
+    first.S.causesVersion = 1;
+    assert.equal(await first.pushRoom(), true);
+
+    second.S.roomCode = code;
+    second.S.nameDraft = "阿凱";
+    second.S.joined = true;
+    assert.equal(await second.connectRoom(true), "ok");
+    second.S.step = 8;
+    second.S.active = second.S.selfId;
+
+    const firstCause = first.S.causes.find((cause) => cause.id === "c1");
+    const secondCause = second.S.causes.find((cause) => cause.id === "c2");
+    firstCause.status = "已確認為原因";
+    firstCause.itemVersion += 1;
+    first.S.causesVersion += 1;
+    secondCause.status = "已確認為原因";
+    secondCause.itemVersion += 1;
+    second.S.causesVersion += 1;
+
+    await Promise.all([first.pushRoom(), second.pushRoom()]);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await Promise.all([first.refreshFromServer(), second.refreshFromServer()]);
+      if ([first, second].every((tab) =>
+        tab.S.causes.every((cause) => cause.status === "已確認為原因") && tab.S.step === 9)) break;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+
+    for (const tab of [first, second]) {
+      assert.deepEqual(tab.S.causes.map((cause) => cause.status), ["已確認為原因", "已確認為原因"]);
+      assert.equal(tab.S.step, 9, "both members advance after both confirmations are merged");
+    }
+  });
+
+  test("confirmed classifications received through synchronization reapply their card assignments", () => {
+    const tab = openTab();
+    tab.S.distresses = [
+      { id: "d1", text: "忘記截止日期", itemVersion: 1 },
+      { id: "d2", text: "容易被通知分心", itemVersion: 1 },
+    ];
+    tab.S.causes = [
+      { id: "c1", text: "沒有記錄截止日期", status: "已確認為原因", itemVersion: 2 },
+      { id: "c2", text: "手機通知太多", status: "已確認為原因", itemVersion: 2 },
+    ];
+
+    const grouping = { id: "gp1", source: "member-a", groups: [{ name: "作業安排", ids: ["d1", "d2"] }] };
+    const causeClass = { id: "ccp1", source: "member-a", groups: [{ name: "時間與環境", ids: ["c1", "c2"] }] };
+    tab.mergeRoom({
+      distresses: tab.S.distresses,
+      distressesVersion: 1,
+      groupProposals: [grouping],
+      groupingVotes: {},
+      groupingVersion: 1,
+      groupingConfirmed: grouping.id,
+      topics: [{ id: "formal-0-gp1", name: "作業安排" }],
+      causes: tab.S.causes,
+      causesVersion: 2,
+      causeClassProposals: [causeClass],
+      causeClassVotes: {},
+      causeClassVersion: 1,
+      causeClassConfirmed: causeClass.id,
+      cats: [{ id: "formal-cat-0-ccp1", name: "時間與環境" }],
+    });
+
+    assert.ok(tab.S.distresses.every((distress) => distress.groupId === "formal-0-gp1"));
+    assert.ok(tab.S.causes.every((cause) => cause.catId === "formal-cat-0-ccp1"));
+    assert.deepEqual(tab.S.cats, [{ id: "formal-cat-0-ccp1", name: "時間與環境" }]);
   });
 
   test("a revise verdict carries the suggestion and sends the card back for editing", async () => {

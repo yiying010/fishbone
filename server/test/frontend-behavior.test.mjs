@@ -410,6 +410,54 @@ if (!databaseUrl) {
     assert.ok(tab.S.distresses.every((distress) => distress.groupId === tab.S.topics[0].id));
   });
 
+  test("two members can confirm different cause cards at the same time", async () => {
+    const code = await newRoom();
+    const first = openTab();
+    const second = openTab();
+    first.S.roomCode = code;
+    first.S.nameDraft = "小安";
+    first.S.joined = true;
+    assert.equal(await first.connectRoom(true), "ok");
+
+    first.S.step = 8;
+    first.S.active = first.S.selfId;
+    first.S.causes = [
+      { id: "c1", text: "沒有先整理截止日期", createdBy: first.S.selfId, status: "待確認", itemVersion: 1 },
+      { id: "c2", text: "手機通知太多容易分心", createdBy: second.S.selfId, status: "待確認", itemVersion: 1 },
+    ];
+    first.S.causesVersion = 1;
+    assert.equal(await first.pushRoom(), true);
+
+    second.S.roomCode = code;
+    second.S.nameDraft = "阿凱";
+    second.S.joined = true;
+    assert.equal(await second.connectRoom(true), "ok");
+    second.S.step = 8;
+    second.S.active = second.S.selfId;
+
+    const firstCause = first.S.causes.find((cause) => cause.id === "c1");
+    const secondCause = second.S.causes.find((cause) => cause.id === "c2");
+    firstCause.status = "已確認為原因";
+    firstCause.itemVersion += 1;
+    first.S.causesVersion += 1;
+    secondCause.status = "已確認為原因";
+    secondCause.itemVersion += 1;
+    second.S.causesVersion += 1;
+
+    await Promise.all([first.pushRoom(), second.pushRoom()]);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await Promise.all([first.refreshFromServer(), second.refreshFromServer()]);
+      if ([first, second].every((tab) =>
+        tab.S.causes.every((cause) => cause.status === "已確認為原因") && tab.S.step === 9)) break;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+
+    for (const tab of [first, second]) {
+      assert.deepEqual(tab.S.causes.map((cause) => cause.status), ["已確認為原因", "已確認為原因"]);
+      assert.equal(tab.S.step, 9, "both members advance after both confirmations are merged");
+    }
+  });
+
   test("a revise verdict carries the suggestion and sends the card back for editing", async () => {
     const code = await newRoom();
     const tab = await joinedAtStep14(code);

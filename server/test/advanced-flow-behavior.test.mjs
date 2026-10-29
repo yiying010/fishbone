@@ -73,3 +73,46 @@ test("revision checkpoints wait for every locked member",()=>{
   assert.equal(app.S.step,15);
 });
 
+test("synchronized revision confirmations cannot leave a client stuck at 2/2",()=>{
+  const app=runtime();
+  app.S.membersLocked=true;app.S.lockedMemberIds=["m1","m2"];app.S.step=16;
+  assert.equal(app.applyOutcomeRevisionTarget(14,3,true),true);
+  app.S.revisionCheckpointConfirmations={
+    "3:14:1":{m1:1,m2:2},
+    "3:15:1":{m1:1,m2:2},
+  };
+
+  app.autoAdvanceFromShared();
+
+  assert.equal(app.S.revisionMode,false);
+  assert.equal(app.S.revisionCompletedRound,3);
+  assert.equal(app.S.step,16);
+});
+
+test("a completed revision round dominates a stale active snapshot from the same round",()=>{
+  const app=runtime();
+  app.S.membersLocked=true;app.S.lockedMemberIds=["m1","m2"];app.S.step=16;
+  assert.equal(app.applyOutcomeRevisionTarget(14,3,true),true);
+  app.S.selfId="m1";app.confirmFlowRevision();
+  app.S.selfId="m2";app.confirmFlowRevision();
+  app.S.selfId="m1";app.confirmFlowRevision();
+  app.S.selfId="m2";app.confirmFlowRevision();
+  assert.equal(app.S.revisionMode,false);
+
+  app.mergeRoom({
+    revisionMode:true,
+    revisionTarget:"14",
+    revisionReturnChain:[14,15],
+    revisionChainIndex:0,
+    revisionRoundId:3,
+    revisionCompletedRound:0,
+    revisionCheckpointConfirmations:{"3:14:1":{m1:1,m2:2}},
+    revisionCheckpointGenerations:{},
+    revisionStateVersion:Number(app.S.revisionStateVersion)+100,
+  });
+
+  assert.equal(app.S.revisionMode,false);
+  assert.equal(app.S.revisionCompletedRound,3);
+  assert.equal(app.S.step,16);
+});
+

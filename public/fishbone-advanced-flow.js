@@ -66,7 +66,23 @@
       S.revisionCheckpointGenerations[key]=Math.max(Number(S.revisionCheckpointGenerations[key]||1),Number(data.revisionCheckpointGenerations[key]||1));
     });
     const remoteRevisionVersion=Number(data.revisionStateVersion||0);
-    if(remoteRevisionVersion>Number(S.revisionStateVersion||0)){
+    const localRevisionVersion=Number(S.revisionStateVersion||0);
+    const remoteRevisionRound=Number(data.revisionRoundId||0);
+    const localRevisionRound=Number(S.revisionRoundId||0);
+    const remoteCompletedRound=Number(data.revisionCompletedRound||0);
+    const localCompletedRound=Number(S.revisionCompletedRound||0);
+    /* A completed revision round must dominate an in-flight snapshot from the
+       same round, even when two clients happened to stamp their updates in the
+       same millisecond or the stale writer retried last.  Otherwise the room
+       can reopen Step 14 after both Step 15 confirmations already completed. */
+    const remoteFinishedSameRound=remoteRevisionRound>0&&!data.revisionMode&&remoteCompletedRound>=remoteRevisionRound;
+    const localFinishedSameRound=localRevisionRound>0&&!S.revisionMode&&localCompletedRound>=localRevisionRound;
+    const shouldAcceptRevisionState=remoteRevisionRound>localRevisionRound||(
+      remoteRevisionRound===localRevisionRound&&(
+        remoteFinishedSameRound||(!localFinishedSameRound&&remoteRevisionVersion>localRevisionVersion)
+      )
+    );
+    if(shouldAcceptRevisionState){
       S.revisionMode=!!data.revisionMode;
       S.revisionTarget=String(data.revisionTarget||"");
       S.revisionReturnChain=clone(data.revisionReturnChain||[]);
@@ -76,6 +92,7 @@
       S.revisionStateVersion=remoteRevisionVersion;
     }
     if(S.revisionMode)normalizeFlowRevisionStep();
+    else if(S.revisionRoundId&&S.revisionCompletedRound>=S.revisionRoundId){S.step=16;S.reviewingStep=0}
   };
 
   const baseJoinedMembers=joinedMembers;
@@ -276,7 +293,19 @@
     restoreDrafts();restoreFocus(focus);applyReadOnlyReview();
   };
   const baseAutoAdvance=autoAdvanceFromShared;
-  autoAdvanceFromShared=function(){if(S.revisionMode){normalizeFlowRevisionStep();return}if(Number(S.step)===1&&S.membersLocked&&isLockedMember())S.step=Math.max(2,Number(S.groupProgressStep||2));baseAutoAdvance()};
+  autoAdvanceFromShared=function(){
+    if(S.revisionMode){
+      normalizeFlowRevisionStep();
+      /* A client can receive the last member's confirmation through sync
+         instead of its own click.  Advance every already-confirmed checkpoint
+         so all clients converge rather than displaying a disabled 2/2 state. */
+      let guard=0;
+      while(S.revisionMode&&revisionStatus().all&&guard++<S.revisionReturnChain.length)advanceFlowRevision();
+      return
+    }
+    if(Number(S.step)===1&&S.membersLocked&&isLockedMember())S.step=Math.max(2,Number(S.groupProgressStep||2));
+    baseAutoAdvance()
+  };
   const basePreviousStep=previousStep;
   previousStep=function(){if(S.revisionMode){showGate("修改流程中請依檢查點前進，不要跳離目前步驟。");return}basePreviousStep()};
 

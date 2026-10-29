@@ -114,16 +114,23 @@
     async function requestAiReview(task,itemId){
       if(!S.joined||SYNC.offline||!SYNC.session)return {status:"unavailable"};
       let session=SYNC.session;
-      if(!await publishForAi(session))return {status:"unavailable"};
-      let revision=SYNC.revision,res;
-      try{res=await fetch(roomApi("ai/review"),{method:"POST",cache:"no-store",headers:syncHeaders(true),body:JSON.stringify({task,itemId,baseRevision:revision})})}catch(e){return {status:"unavailable"}}
-      if(SYNC.session!==session)return {status:"stale"};
-      if(res.status===409){await refreshFromServer();return {status:"stale"}}
-      if(!res.ok)return {status:"unavailable"};
-      let data=await res.json().catch(()=>({}));
-      /* The server rejects a stale request itself; this guards the case where a
-         reply is somehow answering a different revision than the one asked for. */
-      return data.baseRevision===revision&&data.result?{status:"ok",result:data.result}:{status:"stale"};
+      /* Another member may publish a different card between our snapshot push
+         and the review request.  Refresh, merge by card revision and retry the
+         review instead of turning this member's unchanged card back into a
+         draft merely because the room revision advanced. */
+      for(let attempt=0;attempt<3;attempt++){
+        if(!await publishForAi(session))return {status:"unavailable"};
+        let revision=SYNC.revision,res;
+        try{res=await fetch(roomApi("ai/review"),{method:"POST",cache:"no-store",headers:syncHeaders(true),body:JSON.stringify({task,itemId,baseRevision:revision})})}catch(e){return {status:"unavailable"}}
+        if(SYNC.session!==session)return {status:"stale"};
+        if(res.status===409){await refreshFromServer();continue}
+        if(!res.ok)return {status:"unavailable"};
+        let data=await res.json().catch(()=>({}));
+        /* The server rejects a stale request itself; this guards the case where a
+           reply is somehow answering a different revision than the one asked for. */
+        return data.baseRevision===revision&&data.result?{status:"ok",result:data.result}:{status:"stale"};
+      }
+      return {status:"stale"};
     }
     function saveArtifact(format,filename,content){
       if(!S.joined||SYNC.offline||!SYNC.session)return;

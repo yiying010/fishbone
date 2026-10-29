@@ -51,7 +51,7 @@ if (!databaseUrl) {
       id: "resp_test",
       model: "test-model",
       status: "completed",
-      output: [{ content: [{ type: "output_text", text: JSON.stringify(aiReview({ task: sent.text.format.name, content })) }] }],
+      output: [{ content: [{ type: "output_text", text: JSON.stringify(await aiReview({ task: sent.text.format.name, content })) }] }],
       usage: { input_tokens: 10, output_tokens: 10 },
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
@@ -104,7 +104,7 @@ if (!databaseUrl) {
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
     "requestAiReview", "sharedSnapshot", "canonJson", "loadRoomToken", "pushRoom",
-    "runMethodAiCheck",
+    "runMethodAiCheck", "refreshFromServer", "autoAdvanceFromShared", "canAdvance",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -266,6 +266,16 @@ if (!databaseUrl) {
     throw new Error("the card never left AI檢查中");
   }
 
+  async function waitForStatus(tab, id, expected) {
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      const card = tab.S.methods.find((m) => m.id === id);
+      if (card?.status === expected) return card;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const card = tab.S.methods.find((m) => m.id === id);
+    throw new Error(`method ${id} stayed at ${card?.status ?? "missing"}`);
+  }
+
   test("pressing 送交 AI 檢查 reaches the provider and applies the verdict to the card", async () => {
     const code = await newRoom();
     const tab = await joinedAtStep14(code);
@@ -294,6 +304,74 @@ if (!databaseUrl) {
     } finally {
       aiReview = null;
     }
+  });
+
+  test("two members can submit different method cards for review at the same time", async () => {
+    const code = await newRoom();
+    const first = openTab();
+    const second = openTab();
+    first.S.roomCode = code;
+    first.S.nameDraft = "小安";
+    first.S.joined = true;
+    assert.equal(await first.connectRoom(true), "ok");
+    first.S.step = 14;
+    first.S.active = first.S.selfId;
+    first.S.problem = "小組作業常常無法準時完成。";
+    first.S.goal = "建立清楚的作業安排，減少遲交。";
+    first.S.causes = [{ id: "c1", text: "沒有先整理截止日期", createdBy: first.S.selfId, status: "已確認為原因" }];
+    first.S.methods = [
+      { id: "m1", text: "每天整理截止日期", createdBy: first.S.selfId, status: "草稿", causes: ["c1"], effect: "先看到期限就能按時完成", itemVersion: 1 },
+      { id: "m2", text: "每天設定作業提醒", createdBy: second.S.selfId, status: "草稿", causes: ["c1"], effect: "提醒能避免忘記作業", itemVersion: 1 },
+    ];
+    first.S.methodsVersion = 1;
+    assert.equal(await first.pushRoom(), true);
+
+    second.S.roomCode = code;
+    second.S.nameDraft = "阿凱";
+    second.S.joined = true;
+    assert.equal(await second.connectRoom(true), "ok");
+    second.S.step = 14;
+    second.S.active = second.S.selfId;
+
+    let calls = 0;
+    aiReview = async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, calls === 1 ? 40 : 10));
+      return { verdict: "pass", reason: "方法具體，也連得回目標。", revision_suggestion: null };
+    };
+    try {
+      first.completeMethodCheck("m1");
+      second.completeMethodCheck("m2");
+      await Promise.all([
+        waitForStatus(first, "m1", "已完成對應檢查"),
+        waitForStatus(second, "m2", "已完成對應檢查"),
+      ]);
+
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await Promise.all([first.refreshFromServer(), second.refreshFromServer()]);
+        if ([first, second].every((tab) => tab.S.methods.every((method) => method.status === "已完成對應檢查"))) break;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      for (const tab of [first, second]) {
+        assert.deepEqual(tab.S.methods.map((method) => method.status), ["已完成對應檢查", "已完成對應檢查"]);
+        assert.equal(tab.S.step, 15, "both members advance only after both cards pass");
+      }
+      assert.ok(calls >= 2, "both cards reached the provider");
+    } finally {
+      aiReview = null;
+    }
+  });
+
+  test("an inconsistent Step 15 room recovers to an editable Step 14", () => {
+    const tab = openTab();
+    tab.S.step = 15;
+    tab.S.reviewingStep = 15;
+    tab.S.groupProgressStep = 15;
+    tab.S.methods = [{ id: "m1", text: "列出截止日期", createdBy: tab.S.selfId, status: "草稿", causes: ["c1"], effect: "避免遲交", itemVersion: 1 }];
+    tab.autoAdvanceFromShared();
+    assert.equal(tab.S.step, 14);
+    assert.equal(tab.S.reviewingStep, 0);
+    assert.equal(tab.canAdvance(14).ok, false);
   });
 
   test("a revise verdict carries the suggestion and sends the card back for editing", async () => {

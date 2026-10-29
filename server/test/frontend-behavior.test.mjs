@@ -104,7 +104,7 @@ if (!databaseUrl) {
   const EXPORTS = [
     "S", "SYNC", "connectRoom", "recoverSession", "completeMethodCheck", "methodEditSoft",
     "requestAiReview", "sharedSnapshot", "canonJson", "loadRoomToken", "pushRoom",
-    "runMethodAiCheck", "refreshFromServer", "autoAdvanceFromShared", "canAdvance",
+    "runMethodAiCheck", "refreshFromServer", "autoAdvanceFromShared", "canAdvance", "mergeRoom",
   ];
   const body = `${sources.join("\n;\n")}\n;return {${EXPORTS.join(",")}};`;
 
@@ -456,6 +456,41 @@ if (!databaseUrl) {
       assert.deepEqual(tab.S.causes.map((cause) => cause.status), ["已確認為原因", "已確認為原因"]);
       assert.equal(tab.S.step, 9, "both members advance after both confirmations are merged");
     }
+  });
+
+  test("confirmed classifications received through synchronization reapply their card assignments", () => {
+    const tab = openTab();
+    tab.S.distresses = [
+      { id: "d1", text: "忘記截止日期", itemVersion: 1 },
+      { id: "d2", text: "容易被通知分心", itemVersion: 1 },
+    ];
+    tab.S.causes = [
+      { id: "c1", text: "沒有記錄截止日期", status: "已確認為原因", itemVersion: 2 },
+      { id: "c2", text: "手機通知太多", status: "已確認為原因", itemVersion: 2 },
+    ];
+
+    const grouping = { id: "gp1", source: "member-a", groups: [{ name: "作業安排", ids: ["d1", "d2"] }] };
+    const causeClass = { id: "ccp1", source: "member-a", groups: [{ name: "時間與環境", ids: ["c1", "c2"] }] };
+    tab.mergeRoom({
+      distresses: tab.S.distresses,
+      distressesVersion: 1,
+      groupProposals: [grouping],
+      groupingVotes: {},
+      groupingVersion: 1,
+      groupingConfirmed: grouping.id,
+      topics: [{ id: "formal-0-gp1", name: "作業安排" }],
+      causes: tab.S.causes,
+      causesVersion: 2,
+      causeClassProposals: [causeClass],
+      causeClassVotes: {},
+      causeClassVersion: 1,
+      causeClassConfirmed: causeClass.id,
+      cats: [{ id: "formal-cat-0-ccp1", name: "時間與環境" }],
+    });
+
+    assert.ok(tab.S.distresses.every((distress) => distress.groupId === "formal-0-gp1"));
+    assert.ok(tab.S.causes.every((cause) => cause.catId === "formal-cat-0-ccp1"));
+    assert.deepEqual(tab.S.cats, [{ id: "formal-cat-0-ccp1", name: "時間與環境" }]);
   });
 
   test("a revise verdict carries the suggestion and sends the card back for editing", async () => {

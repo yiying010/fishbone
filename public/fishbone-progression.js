@@ -12,7 +12,7 @@
       if(step===11)return {ok:goalClear(S.goal)&&!!S.confirmBy.goal,msg:S.goal.trim()?"請先完成決策目標草稿表態。":"請先提出決策目標想法，並完成草稿表態。"};
       if(step===12)return {ok:true,msg:""};
       if(step===13)return {ok:S.methods.some(m=>isOwnCard(m)),msg:"請先提出至少一個自己的可能方法。"};
-      if(step===14){let st=methodCheckDone();return {ok:st.ok,msg:st.total?"請先讓每張方法卡完成 AI 對應檢查，或由原提出者選擇暫不處理／暫不保留。":"請先回到 Step 13 提出至少一個方法。"}};
+      if(step===14){let st=methodCheckDone();return {ok:st.ok&&methodClassCandidates().length,msg:!st.total?"請先回到 Step 13 提出至少一個方法。":!st.ok?"請先讓每張方法卡完成 AI 對應檢查，或由原提出者選擇暫不處理／暫不保留。":"請至少保留一張已完成檢查的方法，再進入方法分類。"}};
       if(step===15){let methods=methodClassCandidates(),info=methodClassVoteInfo();if(S.methodClassConfirmed&&formalMethods().length)return {ok:true,msg:""};if(!methods.length)return {ok:false,msg:"請先在 Step 14 完成至少一張方法檢查。"};if(!S.methodClassProposals.length)return {ok:false,msg:"請先提交至少一版方法分類。"};if(!info.allVoted||activeVoteCount(S.methodClassVotes||{})<=1&&joinedMembers().length>1)return {ok:false,msg:"請等待所有組員完成投票。"};if(info.tie||info.own)return {ok:false,msg:methodClassTieAdvice(info)};return {ok:false,msg:"請先投票選出一版正式方法分類。"}};
       if(step===16){let r=outcomeVoteStatus(),rv=outcomeRevisionStatus();return {ok:S.outcomeOk,msg:S.outcomeNeedsRevision?(!rv.allVoted?"請先讓所有成員選擇最需要先修改的地方。":rv.tie?outcomeRevisionTieAdvice():"請依全組選出的修改方向返回調整。"):!r.allVoted?"請先讓所有成員完成雙向魚骨圖成果表態。":r.revise>r.go?"請先進入第二階段，選出最需要先修改的地方。":r.go===r.revise?"目前平票，請重新檢查成果內容後再表態。":"請先在本頁確認成果內容可繼續。"}};
       if(step===17){let s=solutionVoteStatus();return {ok:s.allVoted&&!!S.feasible&&!!S.unique,msg:!s.allVoted?"請先讓所有成員完成方案選擇。":"請先完成方案選擇並填寫理由。"}};

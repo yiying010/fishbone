@@ -374,6 +374,42 @@ if (!databaseUrl) {
     assert.equal(tab.canAdvance(14).ok, false);
   });
 
+  test("a clear vote result received through synchronization is finalized", () => {
+    const tab = openTab();
+    const otherId = "member-b";
+    tab.S.joined = true;
+    tab.S.step = 3;
+    tab.S.reviewingStep = 0;
+    tab.S.sources = [
+      { id: tab.S.selfId, name: "小安", system: false, joined: true },
+      { id: otherId, name: "阿凱", system: false, joined: true },
+      { id: "group", name: "小組提出", system: true, joined: true },
+      { id: "unknown", name: "未指定", system: true, joined: false },
+    ];
+    tab.S.distresses = [
+      { id: "d1", text: "常常忘記作業期限", createdBy: tab.S.selfId, source: tab.S.selfId },
+      { id: "d2", text: "容易被手機通知分心", createdBy: otherId, source: otherId },
+    ];
+    tab.S.groupProposals = [{
+      id: "gp1",
+      source: tab.S.selfId,
+      groups: [{ name: "時間安排", ids: ["d1", "d2"] }],
+    }];
+    tab.S.groupingRound = 1;
+    tab.S.groupingConfirmed = "";
+    tab.S.groupingVotes = {
+      [tab.S.selfId]: { value: "gp1", round: 1 },
+      [otherId]: { value: "gp1", round: 1 },
+    };
+
+    tab.autoAdvanceFromShared();
+
+    assert.equal(tab.S.groupingConfirmed, "gp1");
+    assert.equal(tab.S.step, 4);
+    assert.deepEqual(tab.S.topics.map((topic) => topic.name), ["時間安排"]);
+    assert.ok(tab.S.distresses.every((distress) => distress.groupId === tab.S.topics[0].id));
+  });
+
   test("a revise verdict carries the suggestion and sends the card back for editing", async () => {
     const code = await newRoom();
     const tab = await joinedAtStep14(code);
